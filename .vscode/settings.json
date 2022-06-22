@@ -1,0 +1,6 @@
+{
+    "java.project.referencedLibraries": [
+        "lib/**/*.jar",
+        "D:\\Apps\\Ghidra\\ghidra_10.1.4_PUBLIC\\Ghidra\\**\\*.jar"
+    ]
+}
