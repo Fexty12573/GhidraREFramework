@@ -6,6 +6,7 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
@@ -13,34 +14,34 @@ import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolTable;
 import org.json.*;
-import org.python.antlr.op.Param;
+
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 public class IL2CPPDumpImporter extends GhidraScript {
 
-	private static final String CLASS_FILTER = "snow.data.DangoMixData"; // Set to null or "" for no filter.
-	private static final boolean LOG_CLASSES = true; // Whether to log which class is being added.
+	// private static final String CLASS_FILTER = "snow.data.Dango"; // Set to null
+	// or "" for no filter.
 
 	static public FunctionManager functionManager;
 	static public DataTypeManager mainTypeManager;
-	static public FileDataTypeManager typeManager;
+	static public DataTypeManager typeManager;
 	static public AddressFactory addressFactory;
 	static public SymbolTable symbolTable;
 	static public CategoryPath category = new CategoryPath("/IL2CPP_Types");
 	static public HashMap<String, DataType> valueTypes;
-	private JSONObject il2cppDump;
 
 	private int classesAdded;
 	private int classesToAdd;
+	private String classFilter;
 
+	private JSONObject il2cppDump;
 	private HashMap<String, RETypeDefinition> typeMap;
 
 	@Override
@@ -49,36 +50,53 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		importIL2CPPDump();
 	}
 
-	private void initialize() {
+	private void initialize() throws Exception {
 		functionManager = currentProgram.getFunctionManager();
 		mainTypeManager = currentProgram.getDataTypeManager();
 		addressFactory = currentProgram.getAddressFactory();
 		symbolTable = currentProgram.getSymbolTable();
 		typeMap = new HashMap<>();
 
-		try {
-			File file = Path.of("IL2CPP_Types.gdt").toFile();
-			if (file.exists()) {
-				println("FILE EXISTS");
-				typeManager = FileDataTypeManager.openFileArchive(file, true);
-			} else {
-				typeManager = FileDataTypeManager.createFileArchive(file);
-			}
-		} catch (IOException e) {
-			println(e.getMessage());
+		// Create a project type archive called 'IL2CPP_TYPES' before running script
+		typeManager = Arrays
+				.stream(state.getTool().getService(DataTypeManagerService.class).getDataTypeManagers())
+				.filter(x -> x.getName().equals("IL2CPP_TYPES"))
+				.findFirst()
+				.orElse(null);
+
+		if (typeManager == null) {
+			throw new Exception("failed to find typemanager");
 		}
 
 		int id = typeManager.startTransaction("add basic types");
-		final var uint8_t = typeManager.addDataType(new TypedefDataType("uint8_t", mainTypeManager.getDataType("/uchar")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int8_t = typeManager.addDataType(new TypedefDataType("int8_t", mainTypeManager.getDataType("/char")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var uint16_t = typeManager.addDataType(new TypedefDataType("uint16_t", mainTypeManager.getDataType("/ushort")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int16_t = typeManager.addDataType(new TypedefDataType("int16_t", mainTypeManager.getDataType("/short")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var uint32_t = typeManager.addDataType(new TypedefDataType("uint32_t", mainTypeManager.getDataType("/uint")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int32_t = typeManager.addDataType(new TypedefDataType("int32_t", mainTypeManager.getDataType("/int")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var uint64_t = typeManager.addDataType(new TypedefDataType("uint64_t", mainTypeManager.getDataType("/ulonglong")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int64_t = typeManager.addDataType(new TypedefDataType("int64_t", mainTypeManager.getDataType("/longlong")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var uintptr_t = typeManager.addDataType(new TypedefDataType("uintptr_t", mainTypeManager.getDataType("/ulonglong")), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var intptr_t = typeManager.addDataType(new TypedefDataType("intptr_t", mainTypeManager.getDataType("/ulonglong")), DataTypeConflictHandler.REPLACE_HANDLER);
+		final var uint8_t = typeManager.addDataType(
+				new TypedefDataType("uint8_t", mainTypeManager.getDataType("/uchar")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var int8_t = typeManager.addDataType(new TypedefDataType("int8_t", mainTypeManager.getDataType("/char")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var uint16_t = typeManager.addDataType(
+				new TypedefDataType("uint16_t", mainTypeManager.getDataType("/ushort")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var int16_t = typeManager.addDataType(
+				new TypedefDataType("int16_t", mainTypeManager.getDataType("/short")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var uint32_t = typeManager.addDataType(
+				new TypedefDataType("uint32_t", mainTypeManager.getDataType("/uint")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var int32_t = typeManager.addDataType(new TypedefDataType("int32_t", mainTypeManager.getDataType("/int")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var uint64_t = typeManager.addDataType(
+				new TypedefDataType("uint64_t", mainTypeManager.getDataType("/ulonglong")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var int64_t = typeManager.addDataType(
+				new TypedefDataType("int64_t", mainTypeManager.getDataType("/longlong")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var uintptr_t = typeManager.addDataType(
+				new TypedefDataType("uintptr_t", mainTypeManager.getDataType("/ulonglong")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		final var intptr_t = typeManager.addDataType(
+				new TypedefDataType("intptr_t", mainTypeManager.getDataType("/ulonglong")),
+				DataTypeConflictHandler.REPLACE_HANDLER);
 		typeManager.endTransaction(id, true);
 
 		valueTypes = new HashMap<>();
@@ -113,78 +131,68 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("u32", uint32_t);
 		valueTypes.put("s64", int64_t);
 		valueTypes.put("u64", uint64_t);
-		
 
 		// TODO: Handle geometric engine types like via.vec4 or via.mat4.
-		// They could be represented as simple float arrays or by explicitly creating a type for the beforehand.
+		// They could be represented as simple float arrays or by explicitly creating a
+		// type for the beforehand.
 	}
 
-	private void importIL2CPPDump() {
-		try {
-			File file = askFile("Select IL2CPP Dump", "Open");
-			il2cppDump = new JSONObject(Files.readString(file.toPath()));
-		} catch (Exception e) {
-			println(e.getMessage());
-			return;
-		}
+	private void importIL2CPPDump() throws Exception {
+
+		File file = askFile("Select IL2CPP Dump", "Open");
+		il2cppDump = new JSONObject(Files.readString(file.toPath()));
+
 		println("JSON Loaded");
 
-		// Add all already existing types to the type map to avoid adding types that have already been added to the archive
-		for (var iter = typeManager.getAllDataTypes(); iter.hasNext();) {
-			DataType dt = iter.next();
-			String name = dt.getDisplayName();
-
-			// Only add IL2CPP Classes and exclude pointers
-			if (name.contains(".") && !name.contains("*")) {
-				classesAdded++;
-
-				var def = new RETypeDefinition(name, il2cppDump.getJSONObject(name));
-				def.setDataType(dt);
-
-				typeMap.put(name, def);
-			}
+		int count = il2cppDump.length();
+		int i = 0;
+		for (var key : il2cppDump.keySet()) {
+			typeMap.put(key, new RETypeDefinition(key, il2cppDump.getJSONObject(key)));
+			println(String.format("parsed (%d/%d)", i++, count));
 		}
-		println("already parsed types mapped");
+		println("JSON parsed");
+		il2cppDump.clear();
+		System.gc();
 
-		var keys = il2cppDump.keySet();
-		if (CLASS_FILTER == null || CLASS_FILTER.isEmpty()) {
+		classFilter = askString("Filter", "Select Class Filter", "snow");
+
+		// // Add all already existing types to the type map to avoid adding types that
+		// // have already been added to the archive
+		// for (var iter = typeManager.getAllDataTypes(); iter.hasNext();) {
+		// DataType dt = iter.next();
+		// String name = dt.getDisplayName();
+
+		// // Only add IL2CPP Classes and exclude pointers
+		// if (name.contains(".") && !name.contains("*")) {
+		// classesAdded++;
+
+		// var def = typeMap.get(name);
+		// def.setDataType(dt);
+		// }
+		// }
+		// println("already parsed types mapped");
+
+		var keys = typeMap.keySet();
+		if (classFilter == null || classFilter.isEmpty()) {
 			classesToAdd = keys.size();
 
 			// Add all types + Methods to ghidra
 			for (var key : keys) {
 				parseClass(key);
-
-				try {
-					// Save during each iteration to allow cancelling and resuming without losing much progress
-					// Might have considerable impact on performance
-					typeManager.save();
-				} catch (IOException e) {
-					println(e.getMessage());
-				}
 			}
 		} else {
-			Set<String> filtered = keys.stream().filter((name) -> name.startsWith(CLASS_FILTER)).collect(Collectors.toSet());
+			Set<String> filtered = keys
+					.stream()
+					.filter((name) -> name.startsWith(classFilter))
+					.collect(Collectors.toSet());
 			classesToAdd = filtered.size();
 
 			for (var key : filtered) {
 				parseClass(key);
-
-				try {
-					typeManager.save();
-				} catch (IOException e) {
-					println(e.getMessage());
-				}
 			}
 		}
-
-		try {
-			typeManager.save();
-		} catch (IOException e) {
-			println(e.getMessage());
-		}
-
-		il2cppDump = null;
 		System.gc();
+
 	}
 
 	public boolean isValueType(String name) {
@@ -211,9 +219,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 		// Type is not a ValueType
 		RETypeDefinition type = typeMap.getOrDefault(name, null);
-		if (type == null) {
+		if (type != null) {
 			parseClass(name);
-			var dt = typeMap.get(name).getDataType();
+			var dt = typeMap.get(name).dataType;
 			if (dt == null) {
 				// Should only happen in case an Exception is thrown in parseClass
 				println("dt is null for " + name + " after parsing");
@@ -222,253 +230,277 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			return dt;
 		}
 
-		DataType dt = type.getDataType();
-		if (dt == null) {
-			// Should technically never happen
-			println("dt is null for " + name);
-		}
-
-		return dt;
+		return null;
 	}
 
 	private Namespace getOrCreateNamespace(String name) {
-		// Packed into a function because I hate java's enforced exception handling or continued propagating.
-		try{
+		// Packed into a function because I hate java's enforced exception handling or
+		// continued propagating.
+		try {
 			return symbolTable.getOrCreateNameSpace(currentProgram.getGlobalNamespace(), name, SourceType.IMPORTED);
 		} catch (Exception e) {
-			println(e.getMessage());
+			println("error getOrCreateNamespace:" + e.getMessage());
 			return null;
 		}
 	}
 
 	private void parseClass(String name) {
-		if (typeMap.containsKey(name)) {
+		if (!typeMap.containsKey(name)) {
 			return;
 		}
 
-		// Not actually an accurate display of progress if a filter is used but at least gives me an idea of how much
-		// was already completed lol.
-		println(String.format("(%d/%d) Adding methods for %s", classesAdded, classesToAdd, name));
-		classesAdded++;
+		RETypeDefinition definition = typeMap.get(name);
+		if (definition.dataType != null) {
+			return;
+		}
 
-		// Create type definition from JSON object for later reference and faster access to data
-		RETypeDefinition definition = new RETypeDefinition(name, il2cppDump.getJSONObject(name));
-		typeMap.put(name, definition);
+		// Not actually an accurate display of progress if a filter is used but at least
+		// gives me an idea of how much was already completed lol.
+		println(String.format("(%d/%d) Parsing class %s", classesAdded, classesToAdd, name));
+		classesAdded++;
+		if (!name.startsWith(classFilter)) {
+			classesToAdd++;
+		}
 
 		// Create ghidra type from type definition
-		StructureDataType type = new StructureDataType(name, definition.getSize());
-		// Store ghidra datatype for later use
-		definition.setDataType(type);
+		DataType type = new StructureDataType(name, definition.size);
+
+		// Enum types should be added as an actual enum, not a structure. They DO have a
+		// structure representation however it is only very rarely used so I don't see
+		// the point of adding that.
+		// Also, this 'if' is inside the hasParent 'if' because enums always have
+		// System.Enum as parent
+		if (definition.isEnum) {
+			var enumType = new EnumDataType(name, getValueType(definition.underlyingType).getLength());
+
+			for (var field : definition.fields) {
+				try {
+					enumType.add(field.name, field.defaultValue);
+				} catch (IllegalArgumentException e) {
+					println(e.getMessage());
+					println(e.getStackTrace()[0].toString());
+				}
+
+			}
+
+			definition.size = enumType.getLength();
+
+			// Overwrite ghidra type of type definition
+			type = enumType;
+		}
+
+		// Register in archive before doing any new recursive parsing
+		int id = typeManager.startTransaction("Add New IL2CPP_Type");
+		definition.dataType = typeManager.addDataType(type, DataTypeConflictHandler.REPLACE_HANDLER);
+		definition.pointerTo = typeManager.addDataType(new PointerDataType(definition.dataType),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+		typeManager.endTransaction(id, true);
 
 		// Parse parent class before parsing current class
 		if (definition.hasParent()) {
-
-			// Enum types should be added as an actual enum, not a structure. They DO have a structure
-			// representation however it is only very rarely used so I don't see the point of adding that.
-			// Also, this 'if' is inside the hasParent 'if' because enums always have System.Enum as parent
-			if (definition.isEnum()) {
-				var enumType = new EnumDataType(name, getValueType(definition.getUnderlyingType()).getLength());
-
-				for (var field : definition.getFields()) {
-					try {
-						enumType.add(field.getName(), field.getDefaultValue());
-					} catch (IllegalArgumentException e) {
-						println(e.getMessage());
-						println(e.getStackTrace()[0].toString());
-					}
-
-				}
-
-				definition.size = enumType.getLength();
-
-				// Overwrite ghidra type of type definition
-				definition.setDataType(enumType);
-			}
-
-			parseClass(definition.getParent());
+			parseClass(definition.parent);
 		}
 
 		// Add all fields to the class
-		addFieldsOfClassToType(definition, type);
+		if (definition.dataType instanceof Structure) {
+			addFieldsOfClassToType(definition, (Structure) definition.dataType);
+		}
 
 		// Add all methods
-		if (definition.hasMethods()) {
-			for (var method : definition.getMethods()) {
-				parseMethod(method, name);
+		if (!definition.methods.isEmpty()) {
+			for (var method : definition.methods) {
+				parseMethod(method, definition);
 			}
 		}
 
-		// Add type to the archive
-		int id = typeManager.startTransaction("Add New IL2CPP_Type");
-		typeManager.addDataType(definition.getDataType(), DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.addDataType(definition.getPointerTo(), DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.endTransaction(id, true);
-
-		// Keeps memory usage a bit lower, but has considerable impact on performance, would not recommend.
-		// Set JVM Memory lower instead if necessary
-		// System.gc();
+		println(String.format("parsing %s done", name));
 	}
 
-	private void parseMethod(REMethod method, String parent) {
-		if (method.getAddress() != 0) {
+	private void parseMethod(REMethod method, RETypeDefinition parent) {
+		if (method.address != 0) {
 			// Get the return type
-			var retType = getValueTypeOrType(method.getReturnType());
+			var retType = getValueTypeOrType(method.returnType);
 			if (retType == null) {
 				// Should generally not happen
-				println("retType is null for " + method.getReturnType());
+				println("retType is null for " + method.returnType);
 				return;
 			}
-
-			// Methods that have a ValueType as return type that is bigger than sizeof(void*) do not actually return it,
-			// but instead take it as an out parameter as the very first parameter. (Before thread context and 'this')
-			if (isValueType(method.getReturnType()) && retType.getLength() > 8) {
-				method.setReturnAsOutParameter();
+			if (!method.implFlags.contains("Native") && (!isValueType(method.returnType) || retType.getLength() > 8)) {
+				retType = new PointerDataType(retType);
 			}
 
-			var address = addressFactory.getAddress(method.getAddressString());
+			var address = addressFactory.getAddress(method.addressString);
 			Function existing = functionManager.getFunctionAt(address);
 			Function function = null;
 
 			if (existing != null) {
 				function = existing;
 
-				// If the function doesn't have a parent namespace then it is most likely auto-created by the
+				// If the function doesn't have a parent namespace then it is most likely
+				// auto-created by the
 				// ghidra analyzer. As such we should change the name
 				if (existing.getParentNamespace() == null) {
 					try {
-						existing.setName(method.getName(), SourceType.IMPORTED);
-						existing.setParentNamespace(getOrCreateNamespace(parent));
-					} catch(Exception e) {
-						println(e.getMessage());
+						existing.setName(method.name, SourceType.IMPORTED);
+						existing.setParentNamespace(getOrCreateNamespace(parent.name));
+					} catch (Exception e) {
+						println("error setting namespace:" + e.getMessage());
 					}
 
 				} else {
-					// If the function already has a parent namespace then we assume that the function was labelled
-					// either by a previous run of the script, or the user explicitly named it. In either case
-					// the function is not renamed and a label is placed instead to preserve existing naming.
+					// If the function already has a parent namespace then we assume that the
+					// function was labelled
+					// either by a previous run of the script, or the user explicitly named it. In
+					// either case
+					// the function is not renamed and a label is placed instead to preserve
+					// existing naming.
 					try {
-						var label = createLabel(address, method.getName(), false);
-						label.setNamespace(getOrCreateNamespace(parent));
+						var label = createLabel(address, method.name, false);
+						label.setNamespace(getOrCreateNamespace(parent.name));
 					} catch (Exception e) {
-						println(e.getMessage());
+						println("error creating label " + e.getMessage());
 					}
 				}
 			} else {
-				// If the function does not yet exist then we try to create it and then rename it. I don't know how this
+				// If the function does not yet exist then we try to create it and then rename
+				// it. I don't know how this
 				// behaves if the bytes at this location have not yet been disassembled.
 				try {
-					function = createFunction(address, method.getName());
-					function.setParentNamespace(getOrCreateNamespace(parent));
+					function = createFunction(address, method.name);
+					function.setParentNamespace(getOrCreateNamespace(parent.name));
 				} catch (Exception e) {
-					println(e.getMessage());
+					println("error creating function: " + e.getMessage());
 				}
 			}
 
-			// Add all parameters to the function. Code is not complete because there are a million exceptions to
-			// consider where certain parameters do not exist or others exist even tho the dump does not specify them.
+			// Add all parameters to the function. Code is not complete because there are a
+			// million exceptions to consider where certain parameters do not exist or
+			// others exist even tho the dump does not specify them.
 			// As a general rule tho:
-			// - The engine conforms to the x64 calling convention so parameters are RCX, RDX, R8, R9, Stack...
-			// - (Basically) all methods take a thread context as their first argument in RCX (or RDX, exception below)
-			// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX (or R8, ...)
-			// - All parameters listed by the dump follow after these 2 in R8/R9 and then on the stack starting at 0x28
-			// - The size of an argument on the stack is at most 8 bytes. Types with size greater 8 are passed as a
+			// - The engine conforms to the x64 calling convention so parameters are RCX,
+			// RDX, R8, R9, Stack...
+			// - (Basically) all methods take a thread context as their first argument in
+			// RCX (or RDX, exception below)
+			// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX
+			// (or R8, ...)
+			// - All parameters listed by the dump follow after these 2 in R8/R9 and then on
+			// the stack starting at 0x28
+			// - The size of an argument on the stack is at most 8 bytes. Types with size
+			// greater 8 are passed as a
 			// pointer.
-			// - Stack arguments are always 8 byte aligned regardless of the size of the type. So +0x28, +0x30, +0x38...
-			// - If a function has a return type which is a ValueType and its size is greater than sizeof(void*) then
-			// this parameter is passed as a pointer in RCX *always*. It is also returned as a pointer
-			// I believe there are also some types that aren't explicitly ValueTypes but still adhere to this behavior.
+			// - Stack arguments are always 8 byte aligned regardless of the size of the
+			// type. So +0x28, +0x30, +0x38...
+			// - If a function has a return type which is a ValueType and its size is
+			// greater than sizeof(void*) then
+			// this parameter is passed as a pointer in RCX *always*. It is also returned as
+			// a pointer
+			// I believe there are also some types that aren't explicitly ValueTypes but
+			// still adhere to this behavior.
 			// - There might be some more intricacies that I have missed...
 			if (function != null) {
 
-				// Check if return type exists already in the type map, parse it otherwise
-				if (!typeMap.containsKey(method.getReturnType())) {
-					parseClass(method.getReturnType());
-				}
-
-				// Change the return type of the function
-				try {
-					function.setReturnType(getValueTypeOrType(method.getReturnType()), SourceType.IMPORTED);
-				} catch (Exception e) {
-					println(e.getMessage());
-				}
-
-				var params = method.getParameters();
+				var params = method.parameters;
 				var funcParams = new ArrayList<ParameterImpl>();
 
 				try {
 					var ret = new ReturnParameterImpl(retType, currentProgram);
 
+					// Methods always take the thread context as their first parameter
+					funcParams.add(new ParameterImpl("vmctx", getValueTypeOrType("/void *"), currentProgram));
+
+					if (method.implFlags.contains("HasThis")) {
+						funcParams
+								.add(new ParameterImpl("this", parent.dataType, currentProgram));
+					}
+
 					for (var param : params) {
-						// (Hopefully) let ghidra automatically determine the register/stack offset of the parameter
 						funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
 					}
 
-					if (method.implFlags.contains("HasThis") && params.size() > 1) {
-						funcParams.set(1, new ParameterImpl(params.get(1).name, getValueTypeOrType(parent), currentProgram));
-					}
-					// Using this function as Function.addParameter is deprecated. This also makes things easier as
-					// ghidra tries to determine Register and stack offset by itself. Might have to change if this
-					// doesn't work.
-					function.updateFunction("__fastcall", ret, funcParams, Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
+					// Using this function as Function.addParameter is deprecated. This also makes
+					// things easier as
+					// ghidra tries to determine Register and stack offset by itself.
+					function.updateFunction("__fastcall", ret, funcParams,
+							Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
 				} catch (Exception e) {
-					println(e.getMessage());
+					println("error parsing function signature:" + e.getMessage());
 				}
 			}
 		}
 	}
 
-	private void addFieldsOfClassToType(RETypeDefinition definition, StructureDataType type) {
+	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type) {
+		if (definition.size == 0) {
+			return;
+		}
+
 		if (definition.hasFields()) {
 			try {
-				addFieldsToType(definition.getFields(), type);
+				addFieldsToType(definition.fields, type);
+
 			} catch (Exception e) {
-				println("Exception adding fields for " + definition.name);
-				println(e.toString());
-				if (e.getStackTrace().length > 0) {
-					println(e.getStackTrace()[0].toString());
+				println("Exception adding fields for " + definition.name + " :" +
+						e.toString());
+				for (var i : e.getStackTrace()) {
+					println(" ->" + i.toString());
 				}
 			}
-		}
 
-		// The IL2CPP Dump only lists fields of the current class, it doesn't list inherited fields of parent classes
-		// so we need to explicitly handle those.
-		if (definition.hasParent()) {
-			String parent = definition.getParent();
-			RETypeDefinition parentDefinition = typeMap.getOrDefault(parent, null);
-			type.replaceAtOffset(0, getValueTypeOrType(parent), parentDefinition.size, "__base_" + parent, "BASE_CLASS");
-			// if (parentDefinition != null) {
-			// 	addFieldsOfClassToType(parentDefinition, type);
-			// } else {
-			// 	parseClass(parent);
-			// 	addFieldsOfClassToType(typeMap.get(parent), type);
-			// }
+		}
+		try {
+			// The IL2CPP Dump only lists fields of the current class, it doesn't list
+			// inherited fields of parent classes
+			// so we need to explicitly handle those.
+			if (definition.hasParent()) {
+				String parent = definition.parent;
+				RETypeDefinition parentDefinition = typeMap.getOrDefault(parent, null);
+				if (parentDefinition != null) {
+
+					int id = typeManager.startTransaction("IL2CPP Add base");
+					type.replaceAtOffset(0, getValueTypeOrType(parent), parentDefinition.size,
+							("__base_" + parent).replace(".", "_"), "BASE_CLASS");
+					typeManager.endTransaction(id, true);
+				}
+			}
+		} catch (Exception e) {
+			println(String.format("Exception adding base class to %s: %s",
+					definition.name, e.toString()));
 		}
 	}
 
-	private void addFieldsToType(ArrayList<REField> fields, StructureDataType type) throws Exception {
+	private void addFieldsToType(ArrayList<REField> fields, Structure type) throws Exception {
+		int id = typeManager.startTransaction("IL2CPP Add fields");
 		for (var field : fields) {
 			if (!field.isStatic()) {
-				String typeName = field.getType();
+				String typeName = field.type;
 
 				RETypeDefinition fieldType = typeMap.getOrDefault(typeName, null);
 				if (fieldType == null) {
+					continue;
+				}
+				if (fieldType != null && fieldType.dataType == null) {
 					parseClass(typeName);
-					fieldType = typeMap.get(typeName);
 				}
 
 				// We need to handle Enums, ValueTypes, and all other types separately.
-				// Enums are the only non-ValueTypes are usually passed by value and stored in their value form too.
-				// ValueTypes are stored in value form so we use "built-in" ghidra types to simplify things.
+				// Enums are the only non-ValueTypes are usually passed by value and stored in
+				// their value form too.
+				// ValueTypes are stored in value form so we use "built-in" ghidra types to
+				// simplify things.
 				// All other types are stored on the heap and are only accessed via pointers.
-				if (fieldType.isEnum()) {
-					type.replaceAtOffset(field.getOffsetFromBase(), fieldType.getDataType(), fieldType.getSize(), field.getName(), field.getFlags());
+				if (fieldType.isEnum) {
+					type.replaceAtOffset(field.offsetFromBase, fieldType.dataType, fieldType.size, field.name,
+							field.flags);
 				} else if (isValueType(typeName)) {
-					type.replaceAtOffset(field.getOffsetFromBase(), getValueType(typeName), fieldType.getSize(), field.getName(), field.getFlags());
+					type.replaceAtOffset(field.offsetFromBase, getValueType(typeName), fieldType.size, field.name,
+							field.flags);
 				} else {
-					type.replaceAtOffset(field.getOffsetFromBase(), fieldType.getPointerTo(), fieldType.getSize(), field.getName(), field.getFlags());
+					type.replaceAtOffset(field.offsetFromBase, fieldType.pointerTo, fieldType.size, field.name,
+							field.flags);
 				}
 			}
 		}
+		typeManager.endTransaction(id, true);
 	}
 
 	private static class REMethod {
@@ -482,18 +514,18 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			}
 		}
 
-		private final String name;
-		private final String flags;
-		private final long address;
-		private final String addressString;
-		private final int id;
-		private final int invokeId;
-		private final String implFlags;
-		private final ArrayList<Parameter> parameters;
-		private final String returnType;
+		public String name;
+		public String flags;
+		public long address;
+		public String addressString;
+		public int id;
+		public int invokeId;
+		public String implFlags;
+		public ArrayList<Parameter> parameters;
+		public String returnType;
 
 		REMethod(String name, JSONObject method) {
-			flags = method.getString("flags");
+			flags = method.has("flags") ? method.getString("flags") : "";
 			addressString = method.getString("function");
 			address = Long.parseLong(addressString, 16);
 			id = method.getInt("id");
@@ -504,95 +536,42 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				implFlags = "";
 			}
 
-			// Since method names are stored with [Name][ID] we remove the ID to avoid confusing names in ghidra.
-			// Also constructor names always start with a '.' so we remove that also to avoid 'Namespace::.Name'
-			this.name = (name.startsWith(".") ? name.substring(1) : name).substring(0, name.indexOf(Integer.toString(id)));
+			// Since method names are stored with [Name][ID] we remove the ID to avoid
+			// confusing names in ghidra.
+			// Also constructor names always start with a '.' so we remove that also to
+			// avoid 'Namespace::.Name'
+			this.name = (name.startsWith(".") ? name.substring(1) : name).substring(0,
+					name.indexOf(Integer.toString(id)));
 
 			parameters = new ArrayList<>();
 			if (method.has("params")) {
 				var params = method.getJSONArray("params");
 				for (int i = 0; i < params.length(); i++) {
 					var param = params.getJSONObject(i);
-					// TODO: Handle possible parameter flags
 					parameters.add(new Parameter(param.getString("name"), param.getString("type")));
 				}
 			}
 
-			if (implFlags.contains("HasThis")) {
-				parameters.add(0, new Parameter("this", "/void *"));
-			}
-
-			// Methods always take the thread context as their first parameter
-			parameters.add(0, new Parameter("vmctx", "/void *"));
-
 			returnType = method.getJSONObject("returns").getString("type");
-		}
-
-		public String getName() {
-			return name;
-		}
-
-		public String getFullName(String parentClass) {
-			return parentClass + "." + name;
-		}
-
-		public String getFlags() {
-			return flags;
-		}
-
-		public long getAddress() {
-			return address;
-		}
-
-		public String getAddressString() {
-			return addressString;
-		}
-
-		public int getId() {
-			return id;
-		}
-
-		public int getInvokeId() {
-			return invokeId;
-		}
-
-		public String getImplFlags() {
-			return implFlags;
-		}
-
-		public ArrayList<Parameter> getParameters() {
-			return parameters;
-		}
-
-		public void setReturnAsOutParameter() {
-			// Out parameters are always in RCX
-			parameters.add(0, new Parameter("out", returnType + " *"));
-		}
-
-		public String getReturnType() {
-			return returnType;
-		}
-
-		public Parameter getParameter(int index) {
-			return parameters.get(index);
 		}
 	}
 
 	private static class REField {
-		private final String flags;
-		private final int id;
-		private final int offsetFromBase;
-		private final int offsetFromFieldPtr;
-		private final String type;
-		private final String name;
-		private final int defaultValue;
+		public String flags;
+		public int id;
+		public int offsetFromBase;
+		public int offsetFromFieldPtr;
+		public String type;
+		public String name;
+		public int defaultValue;
 
 		public REField(String name, JSONObject field) {
-			flags = field.getString("flags");
+			flags = field.has("flags") ? field.getString("flags") : "";
 			id = field.getInt("id");
 			offsetFromBase = Integer.parseInt(field.getString("offset_from_base").substring(2), 16);
 
-			// Only ever used for ValueTypes, can ignore for the most part. Kept it here for completeness' sake.
+			// Only ever used for ValueTypes, can ignore for the most part. Kept it here for
+			// completeness' sake.
 			offsetFromFieldPtr = Integer.parseInt(field.getString("offset_from_fieldptr").substring(2), 16);
 			type = field.getString("type");
 
@@ -601,55 +580,28 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			this.name = name;
 		}
 
-		public String getFlags() {
-			return flags;
-		}
-
 		public boolean isStatic() {
 			return flags.contains("Static");
-		}
-
-		public int getId() {
-			return id;
-		}
-
-		public int getOffsetFromBase() {
-			return offsetFromBase;
-		}
-
-		public int getOffsetFromFieldPtr() {
-			return offsetFromFieldPtr;
-		}
-
-		public String getType() {
-			return type;
-		}
-
-		public String getName() {
-			return name;
-		}
-
-		public int getDefaultValue() {
-			return defaultValue;
 		}
 	}
 
 	private static class RETypeDefinition {
-		private final String name;
-		private int size;
-		private final String parent;
-		private final ArrayList<REField> fields;
-		private final ArrayList<REMethod> methods;
-		private final boolean isValueType;
-		private final boolean isEnum;
-		private final String underlyingType;
+		public String name;
+		public int size;
+		public String parent;
+		public ArrayList<REField> fields;
+		public ArrayList<REMethod> methods;
+		public boolean isValueType;
+		public boolean isEnum;
+		public String underlyingType;
 
-		private DataType dataType;
-		private PointerDataType pointerTo;
+		public DataType dataType;
+		public DataType pointerTo;
 
 		public RETypeDefinition(String className, JSONObject object) {
 			name = className;
-			size = Integer.parseInt(object.getString("size"), 16);
+			if (object.has("size"))
+				size = Integer.parseInt(object.getString("size"), 16);
 			parent = object.has("parent") ? object.getString("parent") : "";
 			fields = new ArrayList<>();
 			methods = new ArrayList<>();
@@ -668,7 +620,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			if (isEnum) {
 				// Get the enums underlying type
 				if (object.has("reflection_properties")) {
-					underlyingType = object.getJSONObject("reflection_properties").getJSONObject("value__").getString("type");
+					underlyingType = object.getJSONObject("reflection_properties").getJSONObject("value__")
+							.getString("type");
 				} else {
 					underlyingType = object.getJSONObject("fields").getJSONObject("value__").getString("type");
 				}
@@ -687,70 +640,19 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				var classMethods = object.getJSONObject("methods");
 				for (var methodName : classMethods.keySet()) {
 					REMethod method = new REMethod(methodName, classMethods.getJSONObject(methodName));
-					if (isValueType) {
-						method.setReturnAsOutParameter();
-					}
-
 					methods.add(method);
 				}
 			}
-		}
-
-		public String getName() {
-			return name;
-		}
-
-		public int getSize() {
-			return size;
-		}
-
-		public boolean hasParent() {
-			return !parent.isEmpty();
-		}
-
-		public String getParent() {
-			return parent;
-		}
-
-		public boolean isEnum() {
-			return isEnum;
-		}
-
-		public String getUnderlyingType() {
-			return underlyingType;
 		}
 
 		public boolean hasFields() {
 			return !fields.isEmpty();
 		}
 
-		public boolean hasMethods() {
-			return !methods.isEmpty();
-		}
 
-		public ArrayList<REField> getFields() {
-			return fields;
-		}
 
-		public ArrayList<REMethod> getMethods() {
-			return methods;
-		}
-
-		public boolean isValueType() {
-			return isValueType;
-		}
-
-		public DataType getDataType() {
-			return dataType;
-		}
-
-		public DataType getPointerTo() {
-			return pointerTo;
-		}
-
-		public void setDataType(DataType type) {
-			dataType = type;
-			pointerTo = new PointerDataType(type, 8);
+		public boolean hasParent() {
+			return !parent.isEmpty();
 		}
 	}
 }
