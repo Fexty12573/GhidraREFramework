@@ -430,6 +430,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type) {
+		if (definition == null) {
+			return;
+		}
+
 		if (definition.size == 0) {
 			return;
 		}
@@ -437,34 +441,14 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		if (definition.hasFields()) {
 			try {
 				addFieldsToType(definition.fields, type);
-
+				if (definition.hasParent()) {
+					addFieldsOfClassToType(typeMap.get(definition.parent), type);
+				}
 			} catch (Exception e) {
 				println("Exception adding fields for " + definition.name + " :" +
 						e.toString());
-				for (var i : e.getStackTrace()) {
-					println(" ->" + i.toString());
-				}
 			}
 
-		}
-		try {
-			// The IL2CPP Dump only lists fields of the current class, it doesn't list
-			// inherited fields of parent classes
-			// so we need to explicitly handle those.
-			if (definition.hasParent()) {
-				String parent = definition.parent;
-				RETypeDefinition parentDefinition = typeMap.getOrDefault(parent, null);
-				if (parentDefinition != null) {
-
-					int id = typeManager.startTransaction("IL2CPP Add base");
-					type.replaceAtOffset(0, getValueTypeOrType(parent), parentDefinition.size,
-							("__base_" + parent).replace(".", "_"), "BASE_CLASS");
-					typeManager.endTransaction(id, true);
-				}
-			}
-		} catch (Exception e) {
-			println(String.format("Exception adding base class to %s: %s",
-					definition.name, e.toString()));
 		}
 	}
 
