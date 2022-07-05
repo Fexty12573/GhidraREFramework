@@ -15,8 +15,11 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolTable;
 import org.json.*;
 
-
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -25,9 +28,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public class IL2CPPDumpImporter extends GhidraScript {
-
-	// private static final String CLASS_FILTER = "snow.data.Dango"; // Set to null
-	// or "" for no filter.
 
 	static public FunctionManager functionManager;
 	static public DataTypeManager mainTypeManager;
@@ -123,6 +123,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("System.TypeCode", mainTypeManager.getDataType("/int"));
 		valueTypes.put("System.DateTime", uint64_t);
 		valueTypes.put("System.TimeSpan", int64_t);
+		valueTypes.put("via.Color", uint32_t);
 		valueTypes.put("s8", int8_t);
 		valueTypes.put("u8", uint8_t);
 		valueTypes.put("s16", int16_t);
@@ -138,9 +139,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void importIL2CPPDump() throws Exception {
-
 		File file = askFile("Select IL2CPP Dump", "Open");
-		il2cppDump = new JSONObject(Files.readString(file.toPath()));
+		il2cppDump = new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
 
 		println("JSON Loaded");
 
@@ -150,27 +150,12 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			typeMap.put(key, new RETypeDefinition(key, il2cppDump.getJSONObject(key)));
 			println(String.format("parsed (%d/%d)", i++, count));
 		}
+
 		println("JSON parsed");
 		il2cppDump.clear();
 		System.gc();
 
 		classFilter = askString("Filter", "Select Class Filter", "snow");
-
-		// // Add all already existing types to the type map to avoid adding types that
-		// // have already been added to the archive
-		// for (var iter = typeManager.getAllDataTypes(); iter.hasNext();) {
-		// DataType dt = iter.next();
-		// String name = dt.getDisplayName();
-
-		// // Only add IL2CPP Classes and exclude pointers
-		// if (name.contains(".") && !name.contains("*")) {
-		// classesAdded++;
-
-		// var def = typeMap.get(name);
-		// def.setDataType(dt);
-		// }
-		// }
-		// println("already parsed types mapped");
 
 		var keys = typeMap.keySet();
 		if (classFilter == null || classFilter.isEmpty()) {
@@ -239,7 +224,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		try {
 			return symbolTable.getOrCreateNameSpace(currentProgram.getGlobalNamespace(), name, SourceType.IMPORTED);
 		} catch (Exception e) {
-			println("error getOrCreateNamespace:" + e.getMessage());
+			println("error getOrCreateNamespace: " + e.getMessage());
 			return null;
 		}
 	}
@@ -303,7 +288,11 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 		// Add all fields to the class
 		if (definition.dataType instanceof Structure) {
-			addFieldsOfClassToType(definition, (Structure) definition.dataType);
+			if (definition.name.endsWith("[]")) {
+				addFieldsToArrayType(definition, (Structure) definition.dataType);
+			} else {
+				addFieldsOfClassToType(definition, (Structure) definition.dataType);
+			}
 		}
 
 		// Add all methods
@@ -426,6 +415,30 @@ public class IL2CPPDumpImporter extends GhidraScript {
 					println("error parsing function signature:" + e.getMessage());
 				}
 			}
+		}
+	}
+
+	private void addFieldsToArrayType(RETypeDefinition definition, Structure type) {
+		type.deleteAll();
+		type.growStructure(0x20);
+
+		type.replaceAtOffset(0x0, getValueTypeOrType("/void *"), 8, "object_info", "");
+		type.replaceAtOffset(0x8, getValueType("System.UInt32"), 4, "ref_count", "");
+		type.replaceAtOffset(0x10, getValueTypeOrType("/void *"), 8, "contained_type", "");
+		type.replaceAtOffset(0x18, getValueType("System.UInt32"), 4, "Capacity?", "");
+		type.replaceAtOffset(0x1C, getValueType("System.UInt32"), 4, "Count", "");
+		
+		String containedType = definition.name.replace("[]", "");
+		parseClass(containedType);
+
+		if (isValueType(containedType)) {
+			var typeDef = typeMap.get(containedType);
+			type.growStructure(typeDef.size);
+			type.replaceAtOffset(0x20, new ArrayDataType(typeDef.dataType, 1, typeDef.size), typeDef.size, "Elements", "");
+		} else {
+			var typeDef = typeMap.get(containedType);
+			type.growStructure(0x8);
+			type.replaceAtOffset(0x20, new ArrayDataType(typeDef.pointerTo, 1, 8), 8, "Elements", "");
 		}
 	}
 
