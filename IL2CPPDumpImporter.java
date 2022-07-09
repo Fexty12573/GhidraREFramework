@@ -15,10 +15,7 @@ import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolTable;
 import org.json.*;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -28,6 +25,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public class IL2CPPDumpImporter extends GhidraScript {
+
+	// private static final String CLASS_FILTER = "snow.data.Dango"; // Set to null
+	// or "" for no filter.
 
 	static public FunctionManager functionManager;
 	static public DataTypeManager mainTypeManager;
@@ -123,7 +123,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("System.TypeCode", mainTypeManager.getDataType("/int"));
 		valueTypes.put("System.DateTime", uint64_t);
 		valueTypes.put("System.TimeSpan", int64_t);
-		valueTypes.put("via.Color", uint32_t);
 		valueTypes.put("s8", int8_t);
 		valueTypes.put("u8", uint8_t);
 		valueTypes.put("s16", int16_t);
@@ -132,6 +131,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("u32", uint32_t);
 		valueTypes.put("s64", int64_t);
 		valueTypes.put("u64", uint64_t);
+		valueTypes.put("via.Color", uint32_t);
 
 		// TODO: Handle geometric engine types like via.vec4 or via.mat4.
 		// They could be represented as simple float arrays or by explicitly creating a
@@ -150,7 +150,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			typeMap.put(key, new RETypeDefinition(key, il2cppDump.getJSONObject(key)));
 			println(String.format("parsed (%d/%d)", i++, count));
 		}
-
 		println("JSON parsed");
 		il2cppDump.clear();
 		System.gc();
@@ -224,7 +223,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		try {
 			return symbolTable.getOrCreateNameSpace(currentProgram.getGlobalNamespace(), name, SourceType.IMPORTED);
 		} catch (Exception e) {
-			println("error getOrCreateNamespace: " + e.getMessage());
+			println("error getOrCreateNamespace:" + e.getMessage());
 			return null;
 		}
 	}
@@ -430,15 +429,22 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		
 		String containedType = definition.name.replace("[]", "");
 		parseClass(containedType);
+		var typeDef = typeMap.get(containedType);
 
-		if (isValueType(containedType)) {
-			var typeDef = typeMap.get(containedType);
-			type.growStructure(typeDef.size);
-			type.replaceAtOffset(0x20, new ArrayDataType(typeDef.dataType, 1, typeDef.size), typeDef.size, "Elements", "");
+		if (typeDef != null) {
+			if (isValueType(containedType) || typeDef.isEnum) {
+				type.growStructure(typeDef.size);
+				type.replaceAtOffset(0x20, new ArrayDataType(typeDef.dataType, 1, typeDef.size), typeDef.size, "Elements", "");
+			} else {
+				type.growStructure(0x8);
+				if (typeDef.pointerTo != null) {
+					type.replaceAtOffset(0x20, new ArrayDataType(typeDef.pointerTo, 1, 8), 8, "Elements", "");
+				} else {
+					type.replaceAtOffset(0x20, new ArrayDataType(getValueTypeOrType("/void *"), 1, 8), 8, "Elements", "");
+				}
+			}
 		} else {
-			var typeDef = typeMap.get(containedType);
-			type.growStructure(0x8);
-			type.replaceAtOffset(0x20, new ArrayDataType(typeDef.pointerTo, 1, 8), 8, "Elements", "");
+			println(containedType + " is null after parsing.");
 		}
 	}
 
