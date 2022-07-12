@@ -56,12 +56,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		symbolTable = currentProgram.getSymbolTable();
 		typeMap = new HashMap<>();
 
-		// Create a project type archive called 'IL2CPP_TYPES' before running script
-		typeManager = Arrays
-				.stream(state.getTool().getService(DataTypeManagerService.class).getDataTypeManagers())
-				.filter(x -> x.getName().equals("IL2CPP_TYPES"))
-				.findFirst()
-				.orElse(null);
+		typeManager = mainTypeManager;
 
 		if (typeManager == null) {
 			throw new Exception("failed to find typemanager");
