@@ -311,17 +311,21 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 		// If there are already symbols here, this is a generic function and we don't
 		// actually want to have a typed function, remove the function if it's there and
-		// just add labels
+		// add labels and a generic function to mark it's been acknowledged
 		var address = addressFactory.getAddress(method.addressString);
 		var symbol = getSymbolAt(address);
 		if (symbol != null) {
 			try {
 				Function existing = functionManager.getFunctionAt(address);
-				if (existing != null && existing.getParentNamespace() != null) {
+				if (existing != null && existing.getParentNamespace() != currentProgram.getGlobalNamespace()) {
 					createLabel(address, existing.getName(), existing.getParentNamespace(), false,
 							SourceType.USER_DEFINED);
 					functionManager.removeFunction(address);
-					printf("deleting function %s::%s\n", existing.getParentNamespace(), existing.getName());
+					var name = String.format("GenericFunction_%x", address.getOffset());
+					if (existing.getName().equals(method.name)) {
+						name = method.name;
+					}
+					createFunction(address, name);
 				}
 
 				createLabel(address, method.name, getOrCreateNamespace(parent.name), false,
