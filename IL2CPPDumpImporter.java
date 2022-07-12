@@ -62,7 +62,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			throw new Exception("failed to find typemanager");
 		}
 
-		int id = typeManager.startTransaction("add basic types");
 		final var uint8_t = typeManager.addDataType(
 				new TypedefDataType("uint8_t", mainTypeManager.getDataType("/uchar")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
@@ -91,7 +90,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		final var intptr_t = typeManager.addDataType(
 				new TypedefDataType("intptr_t", mainTypeManager.getDataType("/ulonglong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.endTransaction(id, true);
 
 		valueTypes = new HashMap<>();
 		valueTypes.put("System.Single", mainTypeManager.getDataType("/float"));
@@ -268,11 +266,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 
 		// Register in archive before doing any new recursive parsing
-		int id = typeManager.startTransaction("Add New IL2CPP_Type");
 		definition.dataType = typeManager.addDataType(type, DataTypeConflictHandler.REPLACE_HANDLER);
 		definition.pointerTo = typeManager.addDataType(new PointerDataType(definition.dataType),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.endTransaction(id, true);
 
 		// Parse parent class before parsing current class
 		if (definition.hasParent()) {
@@ -459,7 +455,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void addFieldsToType(ArrayList<REField> fields, Structure type) throws Exception {
-		int id = typeManager.startTransaction("IL2CPP Add fields");
 		for (var field : fields) {
 			if (!field.isStatic()) {
 				String typeName = field.type;
@@ -490,7 +485,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				}
 			}
 		}
-		typeManager.endTransaction(id, true);
 	}
 
 	private static class REMethod {
