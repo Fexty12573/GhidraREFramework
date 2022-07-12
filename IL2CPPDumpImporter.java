@@ -6,20 +6,19 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
-import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolTable;
+
 import org.json.*;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -305,115 +304,108 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void parseMethod(REMethod method, RETypeDefinition parent) {
-		if (method.address != 0) {
-			// Get the return type
-			var retType = getValueTypeOrType(method.returnType);
-			if (retType == null) {
-				// Should generally not happen
-				println("retType is null for " + method.returnType);
-				return;
-			}
-			if (!method.implFlags.contains("Native") && (!isValueType(method.returnType) || retType.getLength() > 8)) {
-				retType = new PointerDataType(retType);
-			}
+		if (method.address == 0) {
+			return;
+		}
+		// Get the return type
+		var retType = getValueTypeOrType(method.returnType);
+		if (retType == null) {
+			// Should generally not happen
+			println("retType is null for " + method.returnType);
+			return;
+		}
+		if (!method.implFlags.contains("Native") && (!isValueType(method.returnType) || retType.getLength() > 8)) {
+			retType = new PointerDataType(retType);
+		}
 
-			var address = addressFactory.getAddress(method.addressString);
-			Function existing = functionManager.getFunctionAt(address);
-			Function function = null;
-
-			if (existing != null) {
-				function = existing;
-
-				// If the function doesn't have a parent namespace then it is most likely
-				// auto-created by the
-				// ghidra analyzer. As such we should change the name
-				if (existing.getParentNamespace() == null) {
-					try {
-						existing.setName(method.name, SourceType.IMPORTED);
-						existing.setParentNamespace(getOrCreateNamespace(parent.name));
-					} catch (Exception e) {
-						println("error setting namespace:" + e.getMessage());
-					}
-
-				} else {
-					// If the function already has a parent namespace then we assume that the
-					// function was labelled
-					// either by a previous run of the script, or the user explicitly named it. In
-					// either case
-					// the function is not renamed and a label is placed instead to preserve
-					// existing naming.
-					try {
-						var label = createLabel(address, method.name, false);
-						label.setNamespace(getOrCreateNamespace(parent.name));
-					} catch (Exception e) {
-						println("error creating label " + e.getMessage());
-					}
+		// If there are already symbols here, this is a generic function and we don't
+		// actually want to have a typed function, remove the function if it's there and
+		// just add labels
+		var address = addressFactory.getAddress(method.addressString);
+		var symbol = getSymbolAt(address);
+		if (symbol != null) {
+			try {
+				Function existing = functionManager.getFunctionAt(address);
+				if (existing != null && existing.getParentNamespace() != null) {
+					createLabel(address, existing.getName(), existing.getParentNamespace(), false,
+							SourceType.USER_DEFINED);
+					functionManager.removeFunction(address);
+					printf("deleting function %s::%s\n", existing.getParentNamespace(), existing.getName());
 				}
-			} else {
-				// If the function does not yet exist then we try to create it and then rename
-				// it. I don't know how this
-				// behaves if the bytes at this location have not yet been disassembled.
-				try {
-					function = createFunction(address, method.name);
-					function.setParentNamespace(getOrCreateNamespace(parent.name));
-				} catch (Exception e) {
-					println("error creating function: " + e.getMessage());
-				}
+
+				createLabel(address, method.name, getOrCreateNamespace(parent.name), false,
+						SourceType.USER_DEFINED);
+			} catch (Exception e) {
+				println("error creating label: " + e.getMessage());
+			}
+			return;
+		}
+
+		Function function;
+
+		// If the function does not yet exist then we try to create it and then rename
+		// it. I don't know how this
+		// behaves if the bytes at this location have not yet been disassembled.
+		try {
+			function = createFunction(address, method.name);
+			function.setParentNamespace(getOrCreateNamespace(parent.name));
+			// That could be useful, but it's not worth the huge slowdown it causes
+			// function.setComment(String.format("flags: %s\nimpl flags: %s", method.flags,
+			// method.implFlags));
+		} catch (Exception e) {
+			println("error creating function: " + e.getMessage());
+			return;
+		}
+
+		// Add all parameters to the function. Code is not complete because there are a
+		// million exceptions to consider where certain parameters do not exist or
+		// others exist even tho the dump does not specify them.
+		// As a general rule tho:
+		// - The engine conforms to the x64 calling convention so parameters are RCX,
+		// RDX, R8, R9, Stack...
+		// - (Basically) all methods take a thread context as their first argument in
+		// RCX (or RDX, exception below)
+		// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX
+		// (or R8, ...)
+		// - All parameters listed by the dump follow after these 2 in R8/R9 and then on
+		// the stack starting at 0x28
+		// - The size of an argument on the stack is at most 8 bytes. Types with size
+		// greater 8 are passed as a
+		// pointer.
+		// - Stack arguments are always 8 byte aligned regardless of the size of the
+		// type. So +0x28, +0x30, +0x38...
+		// - If a function has a return type which is a ValueType and its size is
+		// greater than sizeof(void*) then
+		// this parameter is passed as a pointer in RCX *always*. It is also returned as
+		// a pointer
+		// I believe there are also some types that aren't explicitly ValueTypes but
+		// still adhere to this behavior.
+		// - There might be some more intricacies that I have missed...
+		var params = method.parameters;
+		var funcParams = new ArrayList<ParameterImpl>();
+
+		try {
+			var ret = new ReturnParameterImpl(retType, currentProgram);
+
+			// Methods always take the thread context as their first parameter
+			funcParams.add(new ParameterImpl("vmctx", getValueTypeOrType("/void *"), currentProgram));
+
+			if (method.implFlags.contains("HasThis")) {
+				funcParams
+						.add(new ParameterImpl("this", parent.dataType, currentProgram));
 			}
 
-			// Add all parameters to the function. Code is not complete because there are a
-			// million exceptions to consider where certain parameters do not exist or
-			// others exist even tho the dump does not specify them.
-			// As a general rule tho:
-			// - The engine conforms to the x64 calling convention so parameters are RCX,
-			// RDX, R8, R9, Stack...
-			// - (Basically) all methods take a thread context as their first argument in
-			// RCX (or RDX, exception below)
-			// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX
-			// (or R8, ...)
-			// - All parameters listed by the dump follow after these 2 in R8/R9 and then on
-			// the stack starting at 0x28
-			// - The size of an argument on the stack is at most 8 bytes. Types with size
-			// greater 8 are passed as a
-			// pointer.
-			// - Stack arguments are always 8 byte aligned regardless of the size of the
-			// type. So +0x28, +0x30, +0x38...
-			// - If a function has a return type which is a ValueType and its size is
-			// greater than sizeof(void*) then
-			// this parameter is passed as a pointer in RCX *always*. It is also returned as
-			// a pointer
-			// I believe there are also some types that aren't explicitly ValueTypes but
-			// still adhere to this behavior.
-			// - There might be some more intricacies that I have missed...
-			if (function != null) {
-
-				var params = method.parameters;
-				var funcParams = new ArrayList<ParameterImpl>();
-
-				try {
-					var ret = new ReturnParameterImpl(retType, currentProgram);
-
-					// Methods always take the thread context as their first parameter
-					funcParams.add(new ParameterImpl("vmctx", getValueTypeOrType("/void *"), currentProgram));
-
-					if (method.implFlags.contains("HasThis")) {
-						funcParams
-								.add(new ParameterImpl("this", parent.dataType, currentProgram));
-					}
-
-					for (var param : params) {
-						funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
-					}
-
-					// Using this function as Function.addParameter is deprecated. This also makes
-					// things easier as
-					// ghidra tries to determine Register and stack offset by itself.
-					function.updateFunction("__fastcall", ret, funcParams,
-							Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
-				} catch (Exception e) {
-					println("error parsing function signature:" + e.getMessage());
-				}
+			for (var param : params) {
+				funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
 			}
+
+			// Using this function as Function.addParameter is deprecated. This also makes
+			// things easier as
+			// ghidra tries to determine Register and stack offset by itself.
+			function.updateFunction("__fastcall", ret, funcParams,
+					Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
+		} catch (Exception e) {
+			println("error parsing function signature:" + e.getMessage());
 		}
 	}
 
@@ -580,7 +572,11 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 			// Only really used for enum members
 			defaultValue = field.optInt("default", 0);
+
 			this.name = name;
+			if (this.name.matches("<(.+)>k__BackingField")) {
+				this.name = this.name.substring(1, this.name.length() - 16);
+			}
 		}
 
 		public boolean isStatic() {
