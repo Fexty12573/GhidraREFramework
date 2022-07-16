@@ -7,6 +7,7 @@
 
 import ghidra.app.script.GhidraScript;
 import ghidra.app.services.DataTypeManagerService;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
@@ -138,6 +139,12 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void importIL2CPPDump() throws Exception {
+
+		if (!askYesNo("Close archive",
+				"Do not forget to collapse the exe type archive or ghidra will freeze during a large import\nContinue ?")) {
+			return;
+		}
+
 		File file = askFile("Select IL2CPP Dump", "Open");
 		il2cppDump = new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
 
@@ -214,6 +221,25 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 
 		return null;
+	}
+
+	private DataType getPassingType(String name) {
+		// We need to handle Enums, ValueTypes, and all other types separately.
+		// Enums are the only non-ValueTypes are usually passed by value and stored in
+		// their value form too.
+		// ValueTypes are stored in value form so we use "built-in" ghidra types to
+		// simplify things.
+		// All other types are stored on the heap and are only accessed via pointers.
+		DataType type = getValueTypeOrType(name);
+		if (isValueType(name) && type.getLength() <= 8) {
+			return type;
+		}
+
+		var typedef = typeMap.get(name);
+		if (typedef == null || typedef.isEnum) {
+			return type;
+		}
+		return typedef.pointerTo;
 	}
 
 	private Namespace getOrCreateNamespace(String name) {
@@ -301,19 +327,41 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		println(String.format("parsing %s done", name));
 	}
 
+	private void handleStaticGetter(RETypeDefinition parent, REMethod method) {
+		try {
+			var fieldName = method.name.substring(4);
+			var fieldType = getPassingType(method.returnType);
+
+			disassemble(toAddr(method.address));
+			var instruction = getInstructionAt(toAddr(method.address));
+			if (instruction == null) {
+				return;
+			}
+
+			if (!instruction.getMnemonicString().equals("MOV")) {
+				return;
+			}
+
+			var addr = (Address) instruction.getOpObjects(1)[0];
+			if (addr == null) {
+				return;
+			}
+
+			createLabel(addr, fieldName, getOrCreateNamespace(parent.name), false, SourceType.IMPORTED);
+			createData(addr, fieldType);
+		} catch (Exception e) {
+			printf("Failed to parse static getter:  %s", e.getMessage());
+			println();
+		}
+	}
+
 	private void parseMethod(REMethod method, RETypeDefinition parent) {
 		if (method.address == 0) {
 			return;
 		}
-		// Get the return type
-		var retType = getValueTypeOrType(method.returnType);
-		if (retType == null) {
-			// Should generally not happen
-			println("retType is null for " + method.returnType);
-			return;
-		}
-		if (!method.implFlags.contains("Native") && (!isValueType(method.returnType) || retType.getLength() > 8)) {
-			retType = new PointerDataType(retType);
+
+		if (method.flags.contains("Static") && method.name.startsWith("get_")) {
+			handleStaticGetter(parent, method);
 		}
 
 		// If there are already symbols here, this is a generic function and we don't
@@ -387,6 +435,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		var funcParams = new ArrayList<ParameterImpl>();
 
 		try {
+			// Get the return type
+			var retType = getPassingType(method.returnType);
+
 			var ret = new ReturnParameterImpl(retType, currentProgram);
 
 			// Methods always take the thread context as their first parameter
@@ -420,26 +471,16 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		type.replaceAtOffset(0x10, getValueTypeOrType("/void *"), 8, "contained_type", "");
 		type.replaceAtOffset(0x18, getValueType("System.UInt32"), 4, "Capacity?", "");
 		type.replaceAtOffset(0x1C, getValueType("System.UInt32"), 4, "Count", "");
-		
-		String containedType = definition.name.replace("[]", "");
-		parseClass(containedType);
-		var typeDef = typeMap.get(containedType);
 
-		if (typeDef != null) {
-			if (isValueType(containedType) || typeDef.isEnum) {
-				type.growStructure(typeDef.size);
-				type.replaceAtOffset(0x20, new ArrayDataType(typeDef.dataType, 1, typeDef.size), typeDef.size, "Elements", "");
-			} else {
-				type.growStructure(0x8);
-				if (typeDef.pointerTo != null) {
-					type.replaceAtOffset(0x20, new ArrayDataType(typeDef.pointerTo, 1, 8), 8, "Elements", "");
-				} else {
-					type.replaceAtOffset(0x20, new ArrayDataType(getValueTypeOrType("/void *"), 1, 8), 8, "Elements", "");
-				}
-			}
-		} else {
-			println(containedType + " is null after parsing.");
+		String containedType = definition.name.replace("[]", "");
+		var containedDataType = getPassingType(containedType);
+		if (containedDataType == null) {
+			containedDataType = getValueTypeOrType("/void *");
 		}
+		type.growStructure(containedDataType.getLength());
+		type.replaceAtOffset(0x20,
+				new ArrayDataType(containedDataType, 1, containedDataType.getLength()),
+				containedDataType.getLength(), "Elements", "");
 	}
 
 	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type) {
@@ -450,7 +491,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		if (definition.size == 0) {
 			return;
 		}
-
+		type.setDescription(String.format("%s:0x%x -> ", definition.name, definition.size) + type.getDescription());
 		if (definition.hasFields()) {
 			try {
 				addFieldsToType(definition.fields, type);
@@ -474,26 +515,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				if (fieldType == null) {
 					continue;
 				}
-				if (fieldType != null && fieldType.dataType == null) {
-					parseClass(typeName);
-				}
 
-				// We need to handle Enums, ValueTypes, and all other types separately.
-				// Enums are the only non-ValueTypes are usually passed by value and stored in
-				// their value form too.
-				// ValueTypes are stored in value form so we use "built-in" ghidra types to
-				// simplify things.
-				// All other types are stored on the heap and are only accessed via pointers.
-				if (fieldType.isEnum) {
-					type.replaceAtOffset(field.offsetFromBase, fieldType.dataType, fieldType.size, field.name,
-							field.flags);
-				} else if (isValueType(typeName)) {
-					type.replaceAtOffset(field.offsetFromBase, getValueType(typeName), fieldType.size, field.name,
-							field.flags);
-				} else {
-					type.replaceAtOffset(field.offsetFromBase, fieldType.pointerTo, fieldType.size, field.name,
-							field.flags);
-				}
+				var fieldDataType = getPassingType(typeName);
+				type.replaceAtOffset(field.offsetFromBase, fieldDataType, fieldDataType.getLength(), field.name,
+						field.flags);
 			}
 		}
 	}
@@ -575,7 +600,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 			this.name = name;
 			if (this.name.matches("<(.+)>k__BackingField")) {
-				this.name = this.name.substring(1, this.name.length() - 16);
+				this.name = "__" + this.name.substring(1, this.name.length() - 16);
+				this.flags += " | BackingField";
 			}
 		}
 
@@ -647,8 +673,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		public boolean hasFields() {
 			return !fields.isEmpty();
 		}
-
-
 
 		public boolean hasParent() {
 			return !parent.isEmpty();
