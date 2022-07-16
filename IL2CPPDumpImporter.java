@@ -6,6 +6,7 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
@@ -29,7 +30,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	// or "" for no filter.
 
 	static public FunctionManager functionManager;
-	static public DataTypeManager mainTypeManager;
+	static public DataTypeManager builtinTypeManager;
 	static public DataTypeManager typeManager;
 	static public AddressFactory addressFactory;
 	static public SymbolTable symbolTable;
@@ -51,50 +52,56 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 	private void initialize() throws Exception {
 		functionManager = currentProgram.getFunctionManager();
-		mainTypeManager = currentProgram.getDataTypeManager();
+		builtinTypeManager = state.getTool().getService(DataTypeManagerService.class).getBuiltInDataTypesManager();
 		addressFactory = currentProgram.getAddressFactory();
 		symbolTable = currentProgram.getSymbolTable();
 		typeMap = new HashMap<>();
 
-		typeManager = mainTypeManager;
+		typeManager = currentProgram.getDataTypeManager();
 
 		if (typeManager == null) {
 			throw new Exception("failed to find typemanager");
 		}
 
 		final var uint8_t = typeManager.addDataType(
-				new TypedefDataType("uint8_t", mainTypeManager.getDataType("/uchar")),
+				new TypedefDataType("uint8_t", builtinTypeManager.getDataType("/uchar")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int8_t = typeManager.addDataType(new TypedefDataType("int8_t", mainTypeManager.getDataType("/char")),
+		final var int8_t = typeManager.addDataType(
+				new TypedefDataType("int8_t", builtinTypeManager.getDataType("/char")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uint16_t = typeManager.addDataType(
-				new TypedefDataType("uint16_t", mainTypeManager.getDataType("/ushort")),
+				new TypedefDataType("uint16_t", builtinTypeManager.getDataType("/ushort")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var int16_t = typeManager.addDataType(
-				new TypedefDataType("int16_t", mainTypeManager.getDataType("/short")),
+				new TypedefDataType("int16_t", builtinTypeManager.getDataType("/short")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uint32_t = typeManager.addDataType(
-				new TypedefDataType("uint32_t", mainTypeManager.getDataType("/uint")),
+				new TypedefDataType("uint32_t", builtinTypeManager.getDataType("/uint")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int32_t = typeManager.addDataType(new TypedefDataType("int32_t", mainTypeManager.getDataType("/int")),
+		final var int32_t = typeManager.addDataType(
+				new TypedefDataType("int32_t", builtinTypeManager.getDataType("/int")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uint64_t = typeManager.addDataType(
-				new TypedefDataType("uint64_t", mainTypeManager.getDataType("/ulonglong")),
+				new TypedefDataType("uint64_t", builtinTypeManager.getDataType("/ulonglong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var int64_t = typeManager.addDataType(
-				new TypedefDataType("int64_t", mainTypeManager.getDataType("/longlong")),
+				new TypedefDataType("int64_t", builtinTypeManager.getDataType("/longlong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uintptr_t = typeManager.addDataType(
-				new TypedefDataType("uintptr_t", mainTypeManager.getDataType("/ulonglong")),
+				new TypedefDataType("uintptr_t", builtinTypeManager.getDataType("/ulonglong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var intptr_t = typeManager.addDataType(
-				new TypedefDataType("intptr_t", mainTypeManager.getDataType("/ulonglong")),
+				new TypedefDataType("intptr_t", builtinTypeManager.getDataType("/ulonglong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 
+		typeManager.addDataType(builtinTypeManager.getDataType("/void"), DataTypeConflictHandler.DEFAULT_HANDLER);
+		typeManager.addDataType(new PointerDataType(typeManager.getDataType("/void")),
+				DataTypeConflictHandler.DEFAULT_HANDLER);
+
 		valueTypes = new HashMap<>();
-		valueTypes.put("System.Single", mainTypeManager.getDataType("/float"));
-		valueTypes.put("System.Double", mainTypeManager.getDataType("/double"));
-		valueTypes.put("System.Void", mainTypeManager.getDataType("/void"));
+		valueTypes.put("System.Single", builtinTypeManager.getDataType("/float"));
+		valueTypes.put("System.Double", builtinTypeManager.getDataType("/double"));
+		valueTypes.put("System.Void", builtinTypeManager.getDataType("/void"));
 		valueTypes.put("System.UInt8", uint8_t);
 		valueTypes.put("System.UInt16", uint16_t);
 		valueTypes.put("System.UInt32", uint32_t);
@@ -103,16 +110,16 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("System.Int16", int16_t);
 		valueTypes.put("System.Int32", int32_t);
 		valueTypes.put("System.Int64", int64_t);
-		valueTypes.put("System.SByte", mainTypeManager.getDataType("/byte"));
-		valueTypes.put("System.Byte", mainTypeManager.getDataType("/byte"));
-		valueTypes.put("System.UByte", mainTypeManager.getDataType("/uchar"));
+		valueTypes.put("System.SByte", builtinTypeManager.getDataType("/byte"));
+		valueTypes.put("System.Byte", builtinTypeManager.getDataType("/byte"));
+		valueTypes.put("System.UByte", builtinTypeManager.getDataType("/uchar"));
 		valueTypes.put("System.UIntPtr", uintptr_t);
 		valueTypes.put("System.IntPtr", intptr_t);
-		valueTypes.put("System.Char", mainTypeManager.getDataType("/char"));
-		valueTypes.put("System.UChar", mainTypeManager.getDataType("/uchar"));
-		valueTypes.put("System.Void*", mainTypeManager.getDataType("/void *"));
-		valueTypes.put("System.Boolean", mainTypeManager.getDataType("/bool"));
-		valueTypes.put("System.TypeCode", mainTypeManager.getDataType("/int"));
+		valueTypes.put("System.Char", builtinTypeManager.getDataType("/char"));
+		valueTypes.put("System.UChar", builtinTypeManager.getDataType("/uchar"));
+		valueTypes.put("System.Void*", typeManager.getDataType("/void *"));
+		valueTypes.put("System.Boolean", builtinTypeManager.getDataType("/bool"));
+		valueTypes.put("System.TypeCode", builtinTypeManager.getDataType("/int"));
 		valueTypes.put("System.DateTime", uint64_t);
 		valueTypes.put("System.TimeSpan", int64_t);
 		valueTypes.put("s8", int8_t);
@@ -182,7 +189,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	private DataType getValueTypeOrType(String name) {
 		// Top-level types start with a '/', should only occur for built-in types.
 		if (name.charAt(0) == '/') {
-			var dt = mainTypeManager.getDataType(name);
+			var dt = typeManager.getDataType(name);
 			if (dt == null) {
 				println("Failed to find datatype:" + name);
 			}
