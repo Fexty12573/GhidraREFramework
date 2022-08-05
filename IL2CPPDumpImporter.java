@@ -6,6 +6,7 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.script.GhidraState;
 import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
@@ -139,10 +140,16 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void importIL2CPPDump() throws Exception {
+		boolean runDisassemble = false;
 
 		if (!askYesNo("Close archive",
 				"Do not forget to collapse the exe type archive or ghidra will freeze during a large import\nContinue ?")) {
 			return;
+		}
+
+		if (askYesNo("Auto-Disassemble",
+				"Do you want to automatically run the post import disassemble script after importing?")) {
+			runDisassemble = true;
 		}
 
 		File file = askFile("Select IL2CPP Dump", "Open");
@@ -183,6 +190,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 		System.gc();
 
+		if (runDisassemble) {
+			runScript("PostImportDisassemble.java", state);
+		}
 	}
 
 	public boolean isValueType(String name) {
