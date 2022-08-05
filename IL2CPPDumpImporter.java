@@ -7,6 +7,7 @@
 
 import ghidra.app.script.GhidraScript;
 import ghidra.app.services.DataTypeManagerService;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
@@ -20,7 +21,6 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -31,7 +31,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	// or "" for no filter.
 
 	static public FunctionManager functionManager;
-	static public DataTypeManager mainTypeManager;
 	static public DataTypeManager typeManager;
 	static public DataTypeManager builtinTypeManager;
 	static public AddressFactory addressFactory;
@@ -54,28 +53,22 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 	private void initialize() throws Exception {
 		functionManager = currentProgram.getFunctionManager();
-		mainTypeManager = currentProgram.getDataTypeManager();
-		builtinTypeManager = BuiltInDataTypeManager.getDataTypeManager();
+		builtinTypeManager = state.getTool().getService(DataTypeManagerService.class).getBuiltInDataTypesManager();
 		addressFactory = currentProgram.getAddressFactory();
 		symbolTable = currentProgram.getSymbolTable();
 		typeMap = new HashMap<>();
 
-		// Create a project type archive called 'IL2CPP_TYPES' before running script
-		typeManager = Arrays
-				.stream(state.getTool().getService(DataTypeManagerService.class).getDataTypeManagers())
-				.filter(x -> x.getName().equals("IL2CPP_TYPES"))
-				.findFirst()
-				.orElse(null);
+		typeManager = currentProgram.getDataTypeManager();
 
 		if (typeManager == null) {
 			throw new Exception("failed to find typemanager");
 		}
 
-		int id = typeManager.startTransaction("add basic types");
 		final var uint8_t = typeManager.addDataType(
 				new TypedefDataType("uint8_t", builtinTypeManager.getDataType("/uchar")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int8_t = typeManager.addDataType(new TypedefDataType("int8_t", builtinTypeManager.getDataType("/char")),
+		final var int8_t = typeManager.addDataType(
+				new TypedefDataType("int8_t", builtinTypeManager.getDataType("/char")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uint16_t = typeManager.addDataType(
 				new TypedefDataType("uint16_t", builtinTypeManager.getDataType("/ushort")),
@@ -86,7 +79,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		final var uint32_t = typeManager.addDataType(
 				new TypedefDataType("uint32_t", builtinTypeManager.getDataType("/uint")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		final var int32_t = typeManager.addDataType(new TypedefDataType("int32_t", builtinTypeManager.getDataType("/int")),
+		final var int32_t = typeManager.addDataType(
+				new TypedefDataType("int32_t", builtinTypeManager.getDataType("/int")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
 		final var uint64_t = typeManager.addDataType(
 				new TypedefDataType("uint64_t", builtinTypeManager.getDataType("/ulonglong")),
@@ -100,10 +94,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		final var intptr_t = typeManager.addDataType(
 				new TypedefDataType("intptr_t", builtinTypeManager.getDataType("/ulonglong")),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.endTransaction(id, true);
 
-		final var void_t = mainTypeManager.addDataType(builtinTypeManager.getDataType("/void"), DataTypeConflictHandler.REPLACE_HANDLER);
-		final var void_ptr = mainTypeManager.addDataType(new PointerDataType(void_t), DataTypeConflictHandler.REPLACE_HANDLER);
+		typeManager.addDataType(builtinTypeManager.getDataType("/void"), DataTypeConflictHandler.DEFAULT_HANDLER);
+		typeManager.addDataType(new PointerDataType(typeManager.getDataType("/void")),
+				DataTypeConflictHandler.DEFAULT_HANDLER);
 
 		valueTypes = new HashMap<>();
 		valueTypes.put("System.Single", builtinTypeManager.getDataType("/float"));
@@ -124,7 +118,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("System.IntPtr", intptr_t);
 		valueTypes.put("System.Char", builtinTypeManager.getDataType("/char"));
 		valueTypes.put("System.UChar", builtinTypeManager.getDataType("/uchar"));
-		valueTypes.put("System.Void*", void_ptr);
+		valueTypes.put("System.Void*", typeManager.getDataType("/void *"));
 		valueTypes.put("System.Boolean", builtinTypeManager.getDataType("/bool"));
 		valueTypes.put("System.TypeCode", builtinTypeManager.getDataType("/int"));
 		valueTypes.put("System.DateTime", uint64_t);
@@ -145,6 +139,12 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void importIL2CPPDump() throws Exception {
+
+		if (!askYesNo("Close archive",
+				"Do not forget to collapse the exe type archive or ghidra will freeze during a large import\nContinue ?")) {
+			return;
+		}
+
 		File file = askFile("Select IL2CPP Dump", "Open");
 		il2cppDump = new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
 
@@ -196,7 +196,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	private DataType getValueTypeOrType(String name) {
 		// Top-level types start with a '/', should only occur for built-in types.
 		if (name.charAt(0) == '/') {
-			var dt = mainTypeManager.getDataType(name);
+			var dt = typeManager.getDataType(name);
 			if (dt == null) {
 				println("Failed to find datatype:" + name);
 			}
@@ -221,6 +221,25 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 
 		return null;
+	}
+
+	private DataType getPassingType(String name) {
+		// We need to handle Enums, ValueTypes, and all other types separately.
+		// Enums are the only non-ValueTypes are usually passed by value and stored in
+		// their value form too.
+		// ValueTypes are stored in value form so we use "built-in" ghidra types to
+		// simplify things.
+		// All other types are stored on the heap and are only accessed via pointers.
+		DataType type = getValueTypeOrType(name);
+		if (isValueType(name) && type.getLength() <= 8) {
+			return type;
+		}
+
+		var typedef = typeMap.get(name);
+		if (typedef == null || typedef.isEnum) {
+			return type;
+		}
+		return typedef.pointerTo;
 	}
 
 	private Namespace getOrCreateNamespace(String name) {
@@ -280,11 +299,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 
 		// Register in archive before doing any new recursive parsing
-		int id = typeManager.startTransaction("Add New IL2CPP_Type");
 		definition.dataType = typeManager.addDataType(type, DataTypeConflictHandler.REPLACE_HANDLER);
 		definition.pointerTo = typeManager.addDataType(new PointerDataType(definition.dataType),
 				DataTypeConflictHandler.REPLACE_HANDLER);
-		typeManager.endTransaction(id, true);
 
 		// Parse parent class before parsing current class
 		if (definition.hasParent()) {
@@ -310,116 +327,138 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		println(String.format("parsing %s done", name));
 	}
 
-	private void parseMethod(REMethod method, RETypeDefinition parent) {
-		if (method.address != 0) {
-			// Get the return type
-			var retType = getValueTypeOrType(method.returnType);
-			if (retType == null) {
-				// Should generally not happen
-				println("retType is null for " + method.returnType);
+	private void handleStaticGetter(RETypeDefinition parent, REMethod method) {
+		try {
+			var fieldName = method.name.substring(4);
+			var fieldType = getPassingType(method.returnType);
+
+			disassemble(toAddr(method.address));
+			var instruction = getInstructionAt(toAddr(method.address));
+			if (instruction == null) {
 				return;
 			}
-			if (!method.implFlags.contains("Native") && (!isValueType(method.returnType) || retType.getLength() > 8)) {
-				retType = new PointerDataType(retType);
+
+			if (!instruction.getMnemonicString().equals("MOV")) {
+				return;
 			}
 
-			var address = addressFactory.getAddress(method.addressString);
-			Function existing = functionManager.getFunctionAt(address);
-			Function function = null;
-
-			if (existing != null) {
-				function = existing;
-
-				// If the function doesn't have a parent namespace then it is most likely
-				// auto-created by the
-				// ghidra analyzer. As such we should change the name
-				if (existing.getParentNamespace() == null) {
-					try {
-						existing.setName(method.name, SourceType.IMPORTED);
-						existing.setParentNamespace(getOrCreateNamespace(parent.name));
-					} catch (Exception e) {
-						println("error setting namespace:" + e.getMessage());
-					}
-
-				} else {
-					// If the function already has a parent namespace then we assume that the
-					// function was labelled
-					// either by a previous run of the script, or the user explicitly named it. In
-					// either case
-					// the function is not renamed and a label is placed instead to preserve
-					// existing naming.
-					try {
-						var label = createLabel(address, method.name, false);
-						label.setNamespace(getOrCreateNamespace(parent.name));
-					} catch (Exception e) {
-						println("error creating label " + e.getMessage());
-					}
-				}
-			} else {
-				// If the function does not yet exist then we try to create it and then rename
-				// it. I don't know how this
-				// behaves if the bytes at this location have not yet been disassembled.
-				try {
-					function = createFunction(address, method.name);
-					function.setParentNamespace(getOrCreateNamespace(parent.name));
-				} catch (Exception e) {
-					println("error creating function: " + e.getMessage());
-				}
+			var addr = (Address) instruction.getOpObjects(1)[0];
+			if (addr == null) {
+				return;
 			}
 
-			// Add all parameters to the function. Code is not complete because there are a
-			// million exceptions to consider where certain parameters do not exist or
-			// others exist even tho the dump does not specify them.
-			// As a general rule tho:
-			// - The engine conforms to the x64 calling convention so parameters are RCX,
-			// RDX, R8, R9, Stack...
-			// - (Basically) all methods take a thread context as their first argument in
-			// RCX (or RDX, exception below)
-			// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX
-			// (or R8, ...)
-			// - All parameters listed by the dump follow after these 2 in R8/R9 and then on
-			// the stack starting at 0x28
-			// - The size of an argument on the stack is at most 8 bytes. Types with size
-			// greater 8 are passed as a
-			// pointer.
-			// - Stack arguments are always 8 byte aligned regardless of the size of the
-			// type. So +0x28, +0x30, +0x38...
-			// - If a function has a return type which is a ValueType and its size is
-			// greater than sizeof(void*) then
-			// this parameter is passed as a pointer in RCX *always*. It is also returned as
-			// a pointer
-			// I believe there are also some types that aren't explicitly ValueTypes but
-			// still adhere to this behavior.
-			// - There might be some more intricacies that I have missed...
-			if (function != null) {
+			createLabel(addr, fieldName, getOrCreateNamespace(parent.name), false, SourceType.IMPORTED);
+			createData(addr, fieldType);
+		} catch (Exception e) {
+			printf("Failed to parse static getter:  %s", e.getMessage());
+			println();
+		}
+	}
 
-				var params = method.parameters;
-				var funcParams = new ArrayList<ParameterImpl>();
+	private void parseMethod(REMethod method, RETypeDefinition parent) {
+		if (method.address == 0) {
+			return;
+		}
 
-				try {
-					var ret = new ReturnParameterImpl(retType, currentProgram);
+		if (method.flags.contains("Static") && method.name.startsWith("get_")) {
+			handleStaticGetter(parent, method);
+		}
 
-					// Methods always take the thread context as their first parameter
-					funcParams.add(new ParameterImpl("vmctx", getValueTypeOrType("/void *"), currentProgram));
-
-					if (method.implFlags.contains("HasThis")) {
-						funcParams
-								.add(new ParameterImpl("this", parent.dataType, currentProgram));
+		// If there are already symbols here, this is a generic function and we don't
+		// actually want to have a typed function, remove the function if it's there and
+		// add labels and a generic function to mark it's been acknowledged
+		var address = addressFactory.getAddress(method.addressString);
+		var symbol = getSymbolAt(address);
+		if (symbol != null) {
+			try {
+				Function existing = functionManager.getFunctionAt(address);
+				if (existing != null && existing.getParentNamespace() != currentProgram.getGlobalNamespace()) {
+					createLabel(address, existing.getName(), existing.getParentNamespace(), false,
+							SourceType.USER_DEFINED);
+					functionManager.removeFunction(address);
+					var name = String.format("GenericFunction_%x", address.getOffset());
+					if (existing.getName().equals(method.name)) {
+						name = method.name;
 					}
-
-					for (var param : params) {
-						funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
-					}
-
-					// Using this function as Function.addParameter is deprecated. This also makes
-					// things easier as
-					// ghidra tries to determine Register and stack offset by itself.
-					function.updateFunction("__fastcall", ret, funcParams,
-							Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
-				} catch (Exception e) {
-					println("error parsing function signature:" + e.getMessage());
+					createFunction(address, name);
 				}
+
+				createLabel(address, method.name, getOrCreateNamespace(parent.name), false,
+						SourceType.USER_DEFINED);
+			} catch (Exception e) {
+				println("error creating label: " + e.getMessage());
 			}
+			return;
+		}
+
+		Function function;
+
+		// If the function does not yet exist then we try to create it and then rename
+		// it. I don't know how this
+		// behaves if the bytes at this location have not yet been disassembled.
+		try {
+			function = createFunction(address, method.name);
+			function.setParentNamespace(getOrCreateNamespace(parent.name));
+			// That could be useful, but it's not worth the huge slowdown it causes
+			// function.setComment(String.format("flags: %s\nimpl flags: %s", method.flags,
+			// method.implFlags));
+		} catch (Exception e) {
+			println("error creating function: " + e.getMessage());
+			return;
+		}
+
+		// Add all parameters to the function. Code is not complete because there are a
+		// million exceptions to consider where certain parameters do not exist or
+		// others exist even tho the dump does not specify them.
+		// As a general rule tho:
+		// - The engine conforms to the x64 calling convention so parameters are RCX,
+		// RDX, R8, R9, Stack...
+		// - (Basically) all methods take a thread context as their first argument in
+		// RCX (or RDX, exception below)
+		// - If a method has the 'HasThis' flag, then it takes a 'this' parameter in RDX
+		// (or R8, ...)
+		// - All parameters listed by the dump follow after these 2 in R8/R9 and then on
+		// the stack starting at 0x28
+		// - The size of an argument on the stack is at most 8 bytes. Types with size
+		// greater 8 are passed as a
+		// pointer.
+		// - Stack arguments are always 8 byte aligned regardless of the size of the
+		// type. So +0x28, +0x30, +0x38...
+		// - If a function has a return type which is a ValueType and its size is
+		// greater than sizeof(void*) then
+		// this parameter is passed as a pointer in RCX *always*. It is also returned as
+		// a pointer
+		// I believe there are also some types that aren't explicitly ValueTypes but
+		// still adhere to this behavior.
+		// - There might be some more intricacies that I have missed...
+		var params = method.parameters;
+		var funcParams = new ArrayList<ParameterImpl>();
+
+		try {
+			// Get the return type
+			var retType = getPassingType(method.returnType);
+
+			var ret = new ReturnParameterImpl(retType, currentProgram);
+
+			// Methods always take the thread context as their first parameter
+			funcParams.add(new ParameterImpl("vmctx", getValueTypeOrType("/void *"), currentProgram));
+
+			if (method.implFlags.contains("HasThis")) {
+				funcParams
+						.add(new ParameterImpl("this", parent.dataType, currentProgram));
+			}
+
+			for (var param : params) {
+				funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
+			}
+
+			// Using this function as Function.addParameter is deprecated. This also makes
+			// things easier as
+			// ghidra tries to determine Register and stack offset by itself.
+			function.updateFunction("__fastcall", ret, funcParams,
+					Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
+		} catch (Exception e) {
+			println("error parsing function signature:" + e.getMessage());
 		}
 	}
 
@@ -432,26 +471,16 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		type.replaceAtOffset(0x10, getValueTypeOrType("/void *"), 8, "contained_type", "");
 		type.replaceAtOffset(0x18, getValueType("System.UInt32"), 4, "_n", "");
 		type.replaceAtOffset(0x1C, getValueType("System.UInt32"), 4, "Count", "");
-		
-		String containedType = definition.name.replace("[]", "");
-		parseClass(containedType);
-		var typeDef = typeMap.get(containedType);
 
-		if (typeDef != null) {
-			if (isValueType(containedType) || typeDef.isEnum) {
-				type.growStructure(typeDef.size);
-				type.replaceAtOffset(0x20, new ArrayDataType(typeDef.dataType, 1, typeDef.size), typeDef.size, "Elements", "");
-			} else {
-				type.growStructure(0x8);
-				if (typeDef.pointerTo != null) {
-					type.replaceAtOffset(0x20, new ArrayDataType(typeDef.pointerTo, 1, 8), 8, "Elements", "");
-				} else {
-					type.replaceAtOffset(0x20, new ArrayDataType(getValueTypeOrType("/void *"), 1, 8), 8, "Elements", "");
-				}
-			}
-		} else {
-			println(containedType + " is null after parsing.");
+		String containedType = definition.name.replace("[]", "");
+		var containedDataType = getPassingType(containedType);
+		if (containedDataType == null) {
+			containedDataType = getValueTypeOrType("/void *");
 		}
+		type.growStructure(containedDataType.getLength());
+		type.replaceAtOffset(0x20,
+				new ArrayDataType(containedDataType, 1, containedDataType.getLength()),
+				containedDataType.getLength(), "Elements", "");
 	}
 
 	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type) {
@@ -462,7 +491,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		if (definition.size == 0) {
 			return;
 		}
-
+		type.setDescription(String.format("%s:0x%x -> ", definition.name, definition.size) + type.getDescription());
 		if (definition.hasFields()) {
 			try {
 				addFieldsToType(definition.fields, type);
@@ -478,7 +507,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void addFieldsToType(ArrayList<REField> fields, Structure type) throws Exception {
-		int id = typeManager.startTransaction("IL2CPP Add fields");
 		for (var field : fields) {
 			if (!field.isStatic()) {
 				String typeName = field.type;
@@ -487,29 +515,12 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				if (fieldType == null) {
 					continue;
 				}
-				if (fieldType != null && fieldType.dataType == null) {
-					parseClass(typeName);
-				}
 
-				// We need to handle Enums, ValueTypes, and all other types separately.
-				// Enums are the only non-ValueTypes are usually passed by value and stored in
-				// their value form too.
-				// ValueTypes are stored in value form so we use "built-in" ghidra types to
-				// simplify things.
-				// All other types are stored on the heap and are only accessed via pointers.
-				if (fieldType.isEnum) {
-					type.replaceAtOffset(field.offsetFromBase, fieldType.dataType, fieldType.size, field.name,
-							field.flags);
-				} else if (isValueType(typeName)) {
-					type.replaceAtOffset(field.offsetFromBase, getValueType(typeName), fieldType.size, field.name,
-							field.flags);
-				} else {
-					type.replaceAtOffset(field.offsetFromBase, fieldType.pointerTo, fieldType.size, field.name,
-							field.flags);
-				}
+				var fieldDataType = getPassingType(typeName);
+				type.replaceAtOffset(field.offsetFromBase, fieldDataType, fieldDataType.getLength(), field.name,
+						field.flags);
 			}
 		}
-		typeManager.endTransaction(id, true);
 	}
 
 	private static class REMethod {
@@ -586,7 +597,12 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 			// Only really used for enum members
 			defaultValue = field.optInt("default", 0);
+
 			this.name = name;
+			if (this.name.matches("<(.+)>k__BackingField")) {
+				this.name = "__" + this.name.substring(1, this.name.length() - 16);
+				this.flags += " | BackingField";
+			}
 		}
 
 		public boolean isStatic() {
@@ -657,8 +673,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		public boolean hasFields() {
 			return !fields.isEmpty();
 		}
-
-
 
 		public boolean hasParent() {
 			return !parent.isEmpty();
