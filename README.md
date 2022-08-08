@@ -43,3 +43,9 @@ Depending on if you decided to run the post-import disassemble script or not, yo
 - Windows x86 PE Exception Handling
 
 The analysis should not take very long with these options.
+
+# Credits
+* Stracker
+  * Various improvements and additions
+  * Making the script much faster
+* Me :)
