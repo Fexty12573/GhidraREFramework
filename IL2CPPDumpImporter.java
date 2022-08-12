@@ -6,7 +6,6 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
-import ghidra.app.script.GhidraState;
 import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
@@ -22,7 +21,9 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -38,6 +39,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	static public SymbolTable symbolTable;
 	static public CategoryPath category = new CategoryPath("/IL2CPP_Types");
 	static public HashMap<String, DataType> valueTypes;
+
+	static public HashMap<String, REField[]> fixedNativeFields = new HashMap<String, REField[]>();
 
 	private int classesAdded;
 	private int classesToAdd;
@@ -137,6 +140,25 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		// TODO: Handle geometric engine types like via.vec4 or via.mat4.
 		// They could be represented as simple float arrays or by explicitly creating a
 		// type for the beforehand.
+
+		// Fixed known definitions
+		fixedNativeFields.put("System.Object", new REField[] {
+				new REField("info", "System.Void*", 0x0),
+				new REField("referenceCount", "System.UInt32", 0x8),
+				new REField("N000071AE", "System.Int16", 0xc),
+		});
+
+		fixedNativeFields.put("via.Component", new REField[] {
+				new REField("ownerGameObject", "via.GameObject", 0x10),
+				new REField("childComponent", "via.Component", 0x18),
+				new REField("prevComponent", "via.Component", 0x20),
+				new REField("nextComponent", "via.Component", 0x28),
+		});
+
+		fixedNativeFields.put("via.GameObject", new REField[] {
+				new REField("transform", "via.Transform", 0x18),
+
+		});
 	}
 
 	private void importIL2CPPDump() throws Exception {
@@ -241,6 +263,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		// simplify things.
 		// All other types are stored on the heap and are only accessed via pointers.
 		DataType type = getValueTypeOrType(name);
+		if (type == null) {
+			return null;
+		}
 		if (isValueType(name) && type.getLength() <= 8) {
 			return type;
 		}
@@ -506,31 +531,31 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			return;
 		}
 		type.setDescription(String.format("%s:0x%x -> ", definition.name, definition.size) + type.getDescription());
-		if (definition.hasFields()) {
-			try {
-				addFieldsToType(definition.fields, type);
-				if (definition.hasParent()) {
-					addFieldsOfClassToType(typeMap.get(definition.parent), type);
-				}
-			} catch (Exception e) {
-				println("Exception adding fields for " + definition.name + " :" +
-						e.toString());
-			}
 
+		try {
+			if (fixedNativeFields.containsKey(definition.name)) {
+				addFieldsToType(Arrays.asList(fixedNativeFields.get(definition.name)), type);
+			}
+			if (definition.hasFields()) {
+				addFieldsToType(definition.fields, type);
+			}
+			if (definition.hasParent()) {
+				addFieldsOfClassToType(typeMap.get(definition.parent), type);
+			}
+		} catch (Exception e) {
+			println("Exception adding fields for " + definition.name + " :" +
+					e.toString());
 		}
 	}
 
-	private void addFieldsToType(ArrayList<REField> fields, Structure type) throws Exception {
+	private void addFieldsToType(List<REField> fields, Structure type) throws Exception {
 		for (var field : fields) {
 			if (!field.isStatic()) {
-				String typeName = field.type;
 
-				RETypeDefinition fieldType = typeMap.getOrDefault(typeName, null);
-				if (fieldType == null) {
+				var fieldDataType = getPassingType(field.type);
+				if (fieldDataType == null) {
 					continue;
 				}
-
-				var fieldDataType = getPassingType(typeName);
 				type.replaceAtOffset(field.offsetFromBase, fieldDataType, fieldDataType.getLength(), field.name,
 						field.flags);
 			}
@@ -598,6 +623,13 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		public String type;
 		public String name;
 		public int defaultValue;
+
+		public REField(String name, String type, int offset) {
+			this.name = name;
+			this.type = type;
+			offsetFromBase = offset;
+			flags = "";
+		}
 
 		public REField(String name, JSONObject field) {
 			flags = field.has("flags") ? field.getString("flags") : "";
