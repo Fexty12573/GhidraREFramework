@@ -352,6 +352,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				return;
 			}
 
+			if (!instruction.getNext().getMnemonicString().equals("RET")) {
+				return;
+			}
+
 			var addr = (Address) instruction.getOpObjects(1)[0];
 			if (addr == null) {
 				return;
