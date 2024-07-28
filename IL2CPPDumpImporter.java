@@ -53,6 +53,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void initialize() throws Exception {
+		// Fix for MHR Versions >= 16.0.0, which have ASLR enabled.
+		currentProgram.setImageBase(toAddr(0x140000000L), true);
+
 		functionManager = currentProgram.getFunctionManager();
 		builtinTypeManager = state.getTool().getService(DataTypeManagerService.class).getBuiltInDataTypesManager();
 		addressFactory = currentProgram.getAddressFactory();
@@ -153,7 +156,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 
 		File file = askFile("Select IL2CPP Dump", "Open");
-		il2cppDump = new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
+		var reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8);
+		il2cppDump = new JSONObject(new JSONTokener(reader));
+		reader.close();
 
 		println("JSON Loaded");
 
