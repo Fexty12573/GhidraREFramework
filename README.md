@@ -27,7 +27,7 @@
 11. Click on the 3 horizontal lines icon in the top right of the window.
 12. Click on the Green **+** icon and select the `GhidraMHRise` directory.
 13. Find the IL2CPPDumpImporter script in the list and run it. Make sure you select the **compact** JSON dump when asked.
-    * I recommend leaving the import filter set to `snow`. *If* you gave ghidra enough RAM (8GB+), the script should finish in approximately 10-20 minutes.
+    * I recommend leaving the import filter set to `snow`/`app`/`via`/`System`. *If* you gave ghidra enough RAM (8GB+), the script should finish in approximately 10-20 minutes.
     * Also note that, the way the filter works, is that it will import every class that starts with the filter, *and* it will import as many classes as needed to fully construct those types, recursively.
 
 ## Post Import
