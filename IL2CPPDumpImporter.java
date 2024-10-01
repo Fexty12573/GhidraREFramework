@@ -54,7 +54,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 	private void initialize() throws Exception {
 		// Fix for MHR Versions >= 16.0.0, which have ASLR enabled.
-		currentProgram.setImageBase(toAddr(0x140000000L), true);
+		var imageBase = askString("Image Base", "Enter the image base of the executable", "0x140000000");
+		currentProgram.setImageBase(toAddr(imageBase), true);
 
 		functionManager = currentProgram.getFunctionManager();
 		builtinTypeManager = state.getTool().getService(DataTypeManagerService.class).getBuiltInDataTypesManager();
