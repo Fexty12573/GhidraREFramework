@@ -173,7 +173,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		il2cppDump.clear();
 		System.gc();
 
-		classFilter = askString("Filter", "Select Class Filter", "snow");
+		classFilter = askString("Filter", "Select Class Filter", "app");
 
 		var keys = typeMap.keySet();
 		if (classFilter == null || classFilter.isEmpty()) {
