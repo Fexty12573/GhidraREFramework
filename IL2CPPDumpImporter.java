@@ -15,9 +15,11 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.SymbolTable;
+import ghidra.util.exception.CancelledException;
 
 import org.json.*;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -42,6 +44,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	private int classesAdded;
 	private int classesToAdd;
 	private String classFilter;
+	private BufferedWriter logWriter;
 
 	private JSONObject il2cppDump;
 	private HashMap<String, RETypeDefinition> typeMap;
@@ -67,6 +70,14 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 		if (typeManager == null) {
 			throw new Exception("failed to find typemanager");
+		}
+
+		try {
+			var logFile = askFile("Select Log File", "Open");
+			logWriter = Files.newBufferedWriter(logFile.toPath(), StandardCharsets.UTF_8);
+		} catch (CancelledException e) {
+			println("No log file selected. Logging exceptions to console.");
+			logWriter = null;
 		}
 
 		final var uint8_t = typeManager.addDataType(
@@ -103,6 +114,57 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		typeManager.addDataType(builtinTypeManager.getDataType("/void"), DataTypeConflictHandler.DEFAULT_HANDLER);
 		typeManager.addDataType(new PointerDataType(typeManager.getDataType("/void")),
 				DataTypeConflictHandler.DEFAULT_HANDLER);
+		
+		final var guid = (Structure)typeManager.addDataType(new StructureDataType("Guid", 0x10), DataTypeConflictHandler.REPLACE_HANDLER);
+		guid.replaceAtOffset(0x0, uint32_t, 4, "Data1", "");
+		guid.replaceAtOffset(0x4, uint16_t, 2, "Data2", "");
+		guid.replaceAtOffset(0x6, uint16_t, 2, "Data3", "");
+		guid.replaceAtOffset(0x8, new ArrayDataType(uint8_t, 8, 1), 8, "Data4", "");
+
+		final var float_t = builtinTypeManager.getDataType("/float");
+		final var vec2 = (Structure)typeManager.addDataType(new StructureDataType("via.vec2", 0x10), DataTypeConflictHandler.REPLACE_HANDLER);
+		vec2.replaceAtOffset(0x0, float_t, 4, "x", "");
+		vec2.replaceAtOffset(0x4, float_t, 4, "y", "");
+
+		final var vec3 = (Structure)typeManager.addDataType(new StructureDataType("via.vec3", 0x10), DataTypeConflictHandler.REPLACE_HANDLER);
+		vec3.replaceAtOffset(0x0, float_t, 4, "x", "");
+		vec3.replaceAtOffset(0x4, float_t, 4, "y", "");
+		vec3.replaceAtOffset(0x8, float_t, 4, "z", "");
+
+		final var vec4 = (Structure)typeManager.addDataType(new StructureDataType("via.vec4", 0x10), DataTypeConflictHandler.REPLACE_HANDLER);
+		vec4.replaceAtOffset(0x0, float_t, 4, "x", "");
+		vec4.replaceAtOffset(0x4, float_t, 4, "y", "");
+		vec4.replaceAtOffset(0x8, float_t, 4, "z", "");
+		vec4.replaceAtOffset(0xC, float_t, 4, "w", "");
+
+		final var mat3 = (Structure)typeManager.addDataType(new StructureDataType("via.mat3", 0x40), DataTypeConflictHandler.REPLACE_HANDLER);
+		mat3.replaceAtOffset(0x00, float_t, 4, "m00", "");
+		mat3.replaceAtOffset(0x04, float_t, 4, "m01", "");
+		mat3.replaceAtOffset(0x08, float_t, 4, "m02", "");
+		mat3.replaceAtOffset(0x10, float_t, 4, "m10", "");
+		mat3.replaceAtOffset(0x14, float_t, 4, "m11", "");
+		mat3.replaceAtOffset(0x18, float_t, 4, "m12", "");
+		mat3.replaceAtOffset(0x20, float_t, 4, "m20", "");
+		mat3.replaceAtOffset(0x24, float_t, 4, "m21", "");
+		mat3.replaceAtOffset(0x28, float_t, 4, "m22", "");
+
+		final var mat4 = (Structure)typeManager.addDataType(new StructureDataType("via.mat4", 0x40), DataTypeConflictHandler.REPLACE_HANDLER);
+		mat4.replaceAtOffset(0x00, float_t, 4, "m00", "");
+		mat4.replaceAtOffset(0x04, float_t, 4, "m01", "");
+		mat4.replaceAtOffset(0x08, float_t, 4, "m02", "");
+		mat4.replaceAtOffset(0x0C, float_t, 4, "m03", "");
+		mat4.replaceAtOffset(0x10, float_t, 4, "m10", "");
+		mat4.replaceAtOffset(0x14, float_t, 4, "m11", "");
+		mat4.replaceAtOffset(0x18, float_t, 4, "m12", "");
+		mat4.replaceAtOffset(0x1C, float_t, 4, "m13", "");
+		mat4.replaceAtOffset(0x20, float_t, 4, "m20", "");
+		mat4.replaceAtOffset(0x24, float_t, 4, "m21", "");
+		mat4.replaceAtOffset(0x28, float_t, 4, "m22", "");
+		mat4.replaceAtOffset(0x2C, float_t, 4, "m23", "");
+		mat4.replaceAtOffset(0x30, float_t, 4, "m30", "");
+		mat4.replaceAtOffset(0x34, float_t, 4, "m31", "");
+		mat4.replaceAtOffset(0x38, float_t, 4, "m32", "");
+		mat4.replaceAtOffset(0x3C, float_t, 4, "m33", "");
 
 		valueTypes = new HashMap<>();
 		valueTypes.put("System.Single", builtinTypeManager.getDataType("/float"));
@@ -128,6 +190,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("System.TypeCode", builtinTypeManager.getDataType("/int"));
 		valueTypes.put("System.DateTime", uint64_t);
 		valueTypes.put("System.TimeSpan", int64_t);
+		valueTypes.put("System.Guid", guid);
 		valueTypes.put("s8", int8_t);
 		valueTypes.put("u8", uint8_t);
 		valueTypes.put("s16", int16_t);
@@ -137,10 +200,11 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		valueTypes.put("s64", int64_t);
 		valueTypes.put("u64", uint64_t);
 		valueTypes.put("via.Color", uint32_t);
-
-		// TODO: Handle geometric engine types like via.vec4 or via.mat4.
-		// They could be represented as simple float arrays or by explicitly creating a
-		// type for the beforehand.
+		valueTypes.put("via.vec2", vec2);
+		valueTypes.put("via.vec3", vec3);
+		valueTypes.put("via.vec4", vec4);
+		valueTypes.put("via.mat3", mat3);
+		valueTypes.put("via.mat4", mat4);
 	}
 
 	private void importIL2CPPDump() throws Exception {
@@ -162,16 +226,24 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		reader.close();
 
 		println("JSON Loaded");
+		monitor.initialize(il2cppDump.length(), "Parsing IL2CPP Dump");
 
 		int count = il2cppDump.length();
 		int i = 0;
 		for (var key : il2cppDump.keySet()) {
 			typeMap.put(key, new RETypeDefinition(key, il2cppDump.getJSONObject(key)));
 			println(String.format("parsed (%d/%d)", i++, count));
+			monitor.incrementProgress(1);
 		}
+
 		println("JSON parsed");
+		monitor.checkCancelled();
 		il2cppDump.clear();
 		System.gc();
+
+		if (!askYesNo("Continue?", "Do you want to continue with the import?")) {
+			return;
+		}
 
 		classFilter = askString("Filter", "Select Class Filter", "app");
 
@@ -189,6 +261,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 					.filter((name) -> name.startsWith(classFilter))
 					.collect(Collectors.toSet());
 			classesToAdd = filtered.size();
+			monitor.initialize(classesToAdd, "Importing IL2CPP Dump");
 
 			for (var key : filtered) {
 				parseClass(key);
@@ -239,15 +312,19 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		return null;
 	}
 
-	private DataType getPassingType(String name) {
+	private DataType getPassingType(String name, boolean forField) {
 		// We need to handle Enums, ValueTypes, and all other types separately.
-		// Enums are the only non-ValueTypes are usually passed by value and stored in
+		// Enums are the only non-ValueTypes that are usually passed by value and stored in
 		// their value form too.
 		// ValueTypes are stored in value form so we use "built-in" ghidra types to
 		// simplify things.
 		// All other types are stored on the heap and are only accessed via pointers.
 		DataType type = getValueTypeOrType(name);
-		if (isValueType(name) && type.getLength() <= 8) {
+
+		// Field ValueTypes are always stored in their value form, even if they are larger
+		// than 8 bytes. Return types/parameters on the other hand are always passed as
+		// pointers if they are larger than 8 bytes.
+		if (isValueType(name) && (forField || type.getLength() <= 8)) {
 			return type;
 		}
 
@@ -256,6 +333,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			return type;
 		}
 		return typedef.pointerTo;
+	}
+
+	private DataType getPassingType(String name) {
+		return getPassingType(name, false);
 	}
 
 	private Namespace getOrCreateNamespace(String name) {
@@ -283,8 +364,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		// gives me an idea of how much was already completed lol.
 		println(String.format("(%d/%d) Parsing class %s", classesAdded, classesToAdd, name));
 		classesAdded++;
+		monitor.incrementProgress(1);
 		if (!name.startsWith(classFilter)) {
 			classesToAdd++;
+			monitor.setMaximum(classesToAdd);
 		}
 
 		// Create ghidra type from type definition
@@ -370,8 +453,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			createLabel(addr, fieldName, getOrCreateNamespace(parent.name), false, SourceType.IMPORTED);
 			createData(addr, fieldType);
 		} catch (Exception e) {
-			printf("Failed to parse static getter:  %s", e.getMessage());
-			println();
+			// printf("Failed to parse static getter:  %s", e.getMessage());
+			// println();
+			logException("Failed to parse static getter: " + method.name, e);
 		}
 	}
 
@@ -406,7 +490,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				createLabel(address, method.name, getOrCreateNamespace(parent.name), false,
 						SourceType.USER_DEFINED);
 			} catch (Exception e) {
-				println("error creating label: " + e.getMessage());
+				// println("error creating label for generic function: " + e.getMessage());
+				logException("error creating label for generic function: " + method.name, e);
 			}
 			return;
 		}
@@ -423,7 +508,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			// function.setComment(String.format("flags: %s\nimpl flags: %s", method.flags,
 			// method.implFlags));
 		} catch (Exception e) {
-			println("error creating function: " + e.getMessage());
+			// println("error creating function: " + e.getMessage());
+			logException("error creating function: " + method.name, e);
 			return;
 		}
 
@@ -478,7 +564,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			function.updateFunction("__fastcall", ret, funcParams,
 					Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
 		} catch (Exception e) {
-			println("error parsing function signature:" + e.getMessage());
+			// println("error parsing function signature:" + e.getMessage());
+			logException("error parsing function signature for " + parent.name + "." + method.name, e);
 		}
 	}
 
@@ -519,8 +606,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 					addFieldsOfClassToType(typeMap.get(definition.parent), type);
 				}
 			} catch (Exception e) {
-				println("Exception adding fields for " + definition.name + " :" +
-						e.toString());
+				logException("error adding fields to type: " + definition.name, e);
 			}
 
 		}
@@ -536,10 +622,33 @@ public class IL2CPPDumpImporter extends GhidraScript {
 					continue;
 				}
 
-				var fieldDataType = getPassingType(typeName);
+				var fieldDataType = getPassingType(typeName, true);
 				type.replaceAtOffset(field.offsetFromBase, fieldDataType, fieldDataType.getLength(), field.name,
 						field.flags);
 			}
+		}
+	}
+
+	private void logException(String message, Exception e) {
+		if (logWriter == null) {
+			println("Encountered Exception: ");
+			println(message);
+			println(e.getMessage());
+			println(e.getStackTrace()[0].toString());
+			return;
+		}
+
+		try {
+			logWriter.write("Encountered Exception: ");
+			logWriter.newLine();
+			logWriter.write(message);
+			logWriter.newLine();
+			logWriter.write(e.getMessage());
+			logWriter.newLine();
+			logWriter.write(e.getStackTrace()[0].toString());
+			logWriter.newLine();
+		} catch (Exception ex) {
+			println("error writing to log file: " + ex.getMessage());
 		}
 	}
 
