@@ -6,7 +6,6 @@
 //@toolbar
 
 import ghidra.app.script.GhidraScript;
-import ghidra.app.script.GhidraState;
 import ghidra.app.services.DataTypeManagerService;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
@@ -29,9 +28,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public class IL2CPPDumpImporter extends GhidraScript {
-
-	// private static final String CLASS_FILTER = "snow.data.Dango"; // Set to null
-	// or "" for no filter.
 
 	static public FunctionManager functionManager;
 	static public DataTypeManager typeManager;
@@ -370,6 +366,16 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			monitor.setMaximum(classesToAdd);
 		}
 
+		if (definition.isValueType && !definition.isEnum) {
+			parseValueType(name, definition);
+		} else {
+			parseReferenceType(name, definition);
+		}
+
+		println(String.format("parsing %s done", name));
+	}
+
+	private void parseReferenceType(String name, RETypeDefinition definition) {
 		// Create ghidra type from type definition
 		DataType type = new StructureDataType(name, definition.size);
 
@@ -412,7 +418,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			if (definition.name.endsWith("[]")) {
 				addFieldsToArrayType(definition, (Structure) definition.dataType);
 			} else {
-				addFieldsOfClassToType(definition, (Structure) definition.dataType);
+				addFieldsOfClassToType(definition, (Structure) definition.dataType, false);
 			}
 		}
 
@@ -422,8 +428,37 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				parseMethod(method, definition);
 			}
 		}
+	}
 
-		println(String.format("parsing %s done", name));
+	private void parseValueType(String name, RETypeDefinition definition) {
+		// For value types we create both a structure for the value type itself and a
+		// structure for its boxed form (i.e. when converted to a System.Object)
+		DataType boxedType = new StructureDataType("Box<" + name + ">", definition.size);
+		DataType valueType = new StructureDataType(name, definition.size - typeMap.get("System.Object").size);
+
+		// Register in archive before doing any new recursive parsing
+		definition.dataType = typeManager.addDataType(valueType, DataTypeConflictHandler.REPLACE_HANDLER);
+		definition.pointerTo = typeManager.addDataType(new PointerDataType(definition.dataType),
+				DataTypeConflictHandler.REPLACE_HANDLER);
+			
+		var boxedGhidraType = typeManager.addDataType(boxedType, DataTypeConflictHandler.REPLACE_HANDLER);
+		typeManager.addDataType(new PointerDataType(boxedGhidraType), DataTypeConflictHandler.REPLACE_HANDLER);
+
+		// Parse parent class before parsing current class
+		if (definition.hasParent()) {
+			parseClass(definition.parent);
+		}
+
+		// Add all fields to the class
+		addFieldsOfClassToType(definition, (Structure) boxedGhidraType, false);
+		addFieldsOfClassToType(definition, (Structure) definition.dataType, true);
+
+		// Add all methods
+		if (!definition.methods.isEmpty()) {
+			for (var method : definition.methods) {
+				parseMethod(method, definition);
+			}
+		}
 	}
 
 	private void handleStaticGetter(RETypeDefinition parent, REMethod method) {
@@ -574,10 +609,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		type.growStructure(0x20);
 
 		type.replaceAtOffset(0x0, getValueTypeOrType("/void *"), 8, "object_info", "");
-		type.replaceAtOffset(0x8, getValueType("System.UInt32"), 4, "ref_count", "");
+		type.replaceAtOffset(0x8, getValueType("System.Int32"), 4, "ref_count", "");
 		type.replaceAtOffset(0x10, getValueTypeOrType("/void *"), 8, "contained_type", "");
-		type.replaceAtOffset(0x18, getValueType("System.UInt32"), 4, "_n", "");
-		type.replaceAtOffset(0x1C, getValueType("System.UInt32"), 4, "Count", "");
+		type.replaceAtOffset(0x18, getValueType("System.Int32"), 4, "_n", "");
+		type.replaceAtOffset(0x1C, getValueType("System.Int32"), 4, "Count", "");
 
 		String containedType = definition.name.replace("[]", "");
 		var containedDataType = getPassingType(containedType);
@@ -590,7 +625,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				containedDataType.getLength(), "Elements", "");
 	}
 
-	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type) {
+	private void addFieldsOfClassToType(RETypeDefinition definition, Structure type, boolean isValueType) {
 		if (definition == null) {
 			return;
 		}
@@ -601,9 +636,9 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		type.setDescription(String.format("%s:0x%x -> ", definition.name, definition.size) + type.getDescription());
 		if (definition.hasFields()) {
 			try {
-				addFieldsToType(definition.fields, type);
+				addFieldsToType(definition.fields, type, isValueType);
 				if (definition.hasParent()) {
-					addFieldsOfClassToType(typeMap.get(definition.parent), type);
+					addFieldsOfClassToType(typeMap.get(definition.parent), type, isValueType);
 				}
 			} catch (Exception e) {
 				logException("error adding fields to type: " + definition.name, e);
@@ -612,7 +647,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		}
 	}
 
-	private void addFieldsToType(ArrayList<REField> fields, Structure type) throws Exception {
+	private void addFieldsToType(ArrayList<REField> fields, Structure type, boolean isValueType) throws Exception {
 		for (var field : fields) {
 			if (!field.isStatic()) {
 				String typeName = field.type;
@@ -623,8 +658,13 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				}
 
 				var fieldDataType = getPassingType(typeName, true);
-				type.replaceAtOffset(field.offsetFromBase, fieldDataType, fieldDataType.getLength(), field.name,
-						field.flags);
+				type.replaceAtOffset(
+					isValueType ? field.offsetFromFieldPtr : field.offsetFromBase,
+					fieldDataType, 
+					fieldDataType.getLength(), 
+					field.name,
+					field.flags
+				);
 			}
 		}
 	}
