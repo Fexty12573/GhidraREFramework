@@ -237,10 +237,6 @@ public class IL2CPPDumpImporter extends GhidraScript {
 		il2cppDump.clear();
 		System.gc();
 
-		if (!askYesNo("Continue?", "Do you want to continue with the import?")) {
-			return;
-		}
-
 		classFilter = askString("Filter", "Select Class Filter", "app");
 
 		var keys = typeMap.keySet();
