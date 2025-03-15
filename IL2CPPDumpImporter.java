@@ -384,6 +384,10 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			var enumType = new EnumDataType(name, getValueType(definition.underlyingType).getLength());
 
 			for (var field : definition.fields) {
+				if (!field.isStatic()) {
+					continue;
+				}
+				
 				try {
 					enumType.add(field.name, field.defaultValue);
 				} catch (IllegalArgumentException e) {
