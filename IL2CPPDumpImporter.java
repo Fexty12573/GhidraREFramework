@@ -431,6 +431,15 @@ public class IL2CPPDumpImporter extends GhidraScript {
 	}
 
 	private void parseValueType(String name, RETypeDefinition definition) {
+		var valueTypeSize = definition.size - typeMap.get("System.Object").size;
+		if (valueTypeSize <= 0) {
+			logError("Value type size is less than or equal to 0: " + name);
+			
+			// We still need to register the type so just parse it as a reference type
+			parseReferenceType(name, definition);
+			return;
+		}
+
 		// For value types we create both a structure for the value type itself and a
 		// structure for its boxed form (i.e. when converted to a System.Object)
 		DataType boxedType = new StructureDataType("Box<" + name + ">", definition.size);
@@ -503,12 +512,14 @@ public class IL2CPPDumpImporter extends GhidraScript {
 			handleStaticGetter(parent, method);
 		}
 
-		// If there are already symbols here, this is a generic function and we don't
-		// actually want to have a typed function, remove the function if it's there and
-		// add labels and a generic function to mark it's been acknowledged
+		// If there are already symbols here, there are 2 possibilities:
+		// 1. This is a generic function and we don't actually want to have a typed function, 
+		// remove the function if it's there and add labels and a generic function to mark it's been acknowledged
+		// 2. There is a symbol that was placed there automatically by ghidra (SourceType.DEFAULT),
+		// in this case we can just overwrite it with our function.
 		var address = addressFactory.getAddress(method.addressString);
 		var symbol = getSymbolAt(address);
-		if (symbol != null) {
+		if (symbol != null && symbol.getSource() != SourceType.DEFAULT) {
 			try {
 				Function existing = functionManager.getFunctionAt(address);
 				if (existing != null && existing.getParentNamespace() != currentProgram.getGlobalNamespace()) {
@@ -533,9 +544,7 @@ public class IL2CPPDumpImporter extends GhidraScript {
 
 		Function function;
 
-		// If the function does not yet exist then we try to create it and then rename
-		// it. I don't know how this
-		// behaves if the bytes at this location have not yet been disassembled.
+		// If the function does not yet exist then we try to create it and then rename it.
 		try {
 			function = createFunction(address, method.name);
 			function.setParentNamespace(getOrCreateNamespace(parent.name));
@@ -593,9 +602,8 @@ public class IL2CPPDumpImporter extends GhidraScript {
 				funcParams.add(new ParameterImpl(param.name, getValueTypeOrType(param.type), currentProgram));
 			}
 
-			// Using this function as Function.addParameter is deprecated. This also makes
-			// things easier as
-			// ghidra tries to determine Register and stack offset by itself.
+			// Using this function because Function.addParameter is deprecated. This also makes
+			// things easier as ghidra tries to determine Register and stack offset by itself.
 			function.updateFunction("__fastcall", ret, funcParams,
 					Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS, true, SourceType.IMPORTED);
 		} catch (Exception e) {
@@ -666,6 +674,23 @@ public class IL2CPPDumpImporter extends GhidraScript {
 					field.flags
 				);
 			}
+		}
+	}
+
+	private void logError(String message) {
+		if (logWriter == null) {
+			println("Encountered Error: ");
+			println(message);
+			return;
+		}
+
+		try {
+			logWriter.write("Encountered Error: ");
+			logWriter.newLine();
+			logWriter.write(message);
+			logWriter.newLine();
+		} catch (Exception e) {
+			println("error writing to log file: " + e.getMessage());
 		}
 	}
 
